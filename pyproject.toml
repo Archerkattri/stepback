@@ -1,0 +1,46 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "stepback"
+version = "0.1.0"
+description = "git time-travel for any AI coding agent — undo a bad Codex/Claude/aider session in one command."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "Krishi Attri", email = "krishiattriwork@gmail.com" }]
+keywords = [
+    "ai", "coding-agent", "checkpoint", "rewind", "undo", "git",
+    "claude-code", "codex", "aider", "time-travel",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Version Control :: Git",
+    "Topic :: Utilities",
+]
+dependencies = [
+    "typer>=0.9",
+    "watchdog>=3.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=7.4"]
+
+[project.urls]
+Homepage = "https://github.com/Archerkattri/stepback"
+Source = "https://github.com/Archerkattri/stepback"
+
+[project.scripts]
+stepback = "stepback.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
