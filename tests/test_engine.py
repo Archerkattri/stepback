@@ -3,11 +3,8 @@
 from __future__ import annotations
 
 import hashlib
-import os
 import subprocess
 from pathlib import Path
-
-import pytest
 
 from stepback.engine import Engine
 
