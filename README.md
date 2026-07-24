@@ -5,6 +5,7 @@
 [![Downloads](https://static.pepy.tech/badge/stepback)](https://pepy.tech/project/stepback)
 [![CI](https://github.com/Archerkattri/stepback/actions/workflows/ci.yml/badge.svg)](https://github.com/Archerkattri/stepback/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/pypi/l/stepback)](LICENSE)
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.21536385.svg)](https://doi.org/10.5281/zenodo.21536385)
 
 git time-travel for any AI coding agent. Undo a bad Codex/Claude/aider session
 in one command, no matter which tool made the mess.
