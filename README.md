@@ -1,5 +1,11 @@
 # stepback
 
+[![PyPI](https://img.shields.io/pypi/v/stepback)](https://pypi.org/project/stepback/)
+[![Python](https://img.shields.io/pypi/pyversions/stepback)](https://pypi.org/project/stepback/)
+[![Downloads](https://static.pepy.tech/badge/stepback)](https://pepy.tech/project/stepback)
+[![CI](https://github.com/Archerkattri/stepback/actions/workflows/ci.yml/badge.svg)](https://github.com/Archerkattri/stepback/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/pypi/l/stepback)](LICENSE)
+
 git time-travel for any AI coding agent. Undo a bad Codex/Claude/aider session
 in one command, no matter which tool made the mess.
 
