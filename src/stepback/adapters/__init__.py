@@ -7,14 +7,16 @@ session state alongside each file checkpoint.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
 
 from .base import AgentAdapter
 from .claude_code import ClaudeCodeAdapter
 from .codex import CodexAdapter
 
-# Registry of all known adapter classes.
-ALL_ADAPTERS = [ClaudeCodeAdapter, CodexAdapter]
+# Registry of all known adapter factories.  Each is a class taking the work tree
+# and returning something that structurally satisfies :class:`AgentAdapter`.
+ALL_ADAPTERS: list[Callable[[Path], AgentAdapter]] = [ClaudeCodeAdapter, CodexAdapter]
 
 
 def detect_adapters(work_tree: Path) -> list[AgentAdapter]:
