@@ -8,8 +8,9 @@ from the agent collapses into a single checkpoint.
 from __future__ import annotations
 
 import threading
+from collections.abc import Callable
 from pathlib import Path
-from typing import Callable
+from typing import Any
 
 from watchdog.events import FileSystemEventHandler
 from watchdog.observers import Observer
@@ -84,10 +85,10 @@ class DebouncedWatcher:
     ):
         self.path = Path(path)
         self._handler = _DebounceHandler(on_settle, quiet_seconds)
-        self._observer = None
+        self._observer: Any = None
         self.backend = "none"
 
-    def __enter__(self) -> "DebouncedWatcher":
+    def __enter__(self) -> DebouncedWatcher:
         self.start()
         return self
 

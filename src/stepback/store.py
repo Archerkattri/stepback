@@ -10,7 +10,8 @@ from __future__ import annotations
 import json
 import os
 import tempfile
-from dataclasses import dataclass, field, asdict
+import time
+from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
 
 
@@ -41,6 +42,8 @@ class RedoEntry:
     time: str
     adapters: dict = field(default_factory=dict)
     session_dir: str | None = None
+    # Ref protecting the pre-rewind commit from the user's own ``git gc``.
+    ref: str | None = None
 
 
 @dataclass
@@ -53,19 +56,27 @@ class State:
     # -- serialization ------------------------------------------------------
 
     @classmethod
-    def load(cls, path: Path) -> "State":
+    def load(cls, path: Path) -> State:
         if not path.exists():
             return cls()
         try:
             raw = json.loads(path.read_text())
-        except (json.JSONDecodeError, OSError):
+            if not isinstance(raw, dict):
+                raise ValueError("state root is not an object")
+            return cls(
+                counter=int(raw.get("counter", 0)),
+                current_session=raw.get("current_session"),
+                checkpoints=[
+                    _load_checkpoint(c) for c in raw.get("checkpoints", []) or []
+                ],
+                redo=[_load_redo(r) for r in raw.get("redo", []) or []],
+            )
+        except (json.JSONDecodeError, OSError, ValueError, TypeError):
+            # Corrupt or partially written state: preserve it for forensics
+            # rather than silently discarding the checkpoint log, then start
+            # from a clean slate so the tool keeps working.
+            _quarantine_corrupt(path)
             return cls()
-        return cls(
-            counter=raw.get("counter", 0),
-            current_session=raw.get("current_session"),
-            checkpoints=[Checkpoint(**c) for c in raw.get("checkpoints", [])],
-            redo=[RedoEntry(**r) for r in raw.get("redo", [])],
-        )
 
     def save(self, path: Path) -> None:
         data = {
@@ -90,6 +101,29 @@ class State:
     def next_id(self) -> int:
         self.counter += 1
         return self.counter
+
+
+def _known_fields(cls) -> set[str]:
+    return {f.name for f in fields(cls)}
+
+
+def _load_checkpoint(raw: dict) -> Checkpoint:
+    data = {k: v for k, v in raw.items() if k in _known_fields(Checkpoint)}
+    return Checkpoint(**data)
+
+
+def _load_redo(raw: dict) -> RedoEntry:
+    data = {k: v for k, v in raw.items() if k in _known_fields(RedoEntry)}
+    return RedoEntry(**data)
+
+
+def _quarantine_corrupt(path: Path) -> None:
+    """Move an unreadable state file aside so it is never silently overwritten."""
+    try:
+        stamp = int(time.time())
+        path.replace(path.with_suffix(path.suffix + f".corrupt-{stamp}"))
+    except OSError:
+        pass
 
 
 def _atomic_write(path: Path, text: str) -> None:

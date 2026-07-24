@@ -23,19 +23,27 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
+from .lock import file_lock
+
 # The well-known SHA-1 of git's empty tree object; used as a diff base.
 EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
 
 # Config overrides applied to every git invocation so behaviour is deterministic
 # and byte-exact regardless of the user's global git config:
-#   core.bare=false     -> allow --work-tree operations against a bare shadow dir
-#   gc.auto=0           -> never auto-gc mid-operation (our refs protect objects)
-#   core.autocrlf=false -> restore bytes exactly, no line-ending translation
+#   core.bare=false        -> allow --work-tree operations against a bare shadow dir
+#   gc.auto=0              -> never auto-gc mid-operation (our refs protect objects)
+#   core.autocrlf=false    -> restore bytes exactly, no line-ending translation
+#   core.quotePath=false   -> emit raw UTF-8 path names, never octal-escaped, so
+#                             file names with unicode/spaces round-trip exactly
+#   core.symlinks=true     -> store and restore symlinks as symlinks
+#   protocol.file.allow=never -> a checkpoint never fetches from submodule URLs
 _SAFE_CONFIG = [
     "-c", "core.bare=false",
     "-c", "gc.auto=0",
     "-c", "core.autocrlf=false",
     "-c", "core.fileMode=true",
+    "-c", "core.quotePath=false",
+    "-c", "core.symlinks=true",
 ]
 
 # Identity used for checkpoint commits.  Set explicitly so checkpoints work even
@@ -77,6 +85,11 @@ class Repo:
         d.mkdir(parents=True, exist_ok=True)
         return d
 
+    @property
+    def lock_path(self) -> Path:
+        """Path of the advisory lock guarding mutating operations."""
+        return self.meta_dir / "stepback.lock"
+
     # -- git command runner -------------------------------------------------
 
     def git(
@@ -107,21 +120,26 @@ class Repo:
             *args,
         ]
         env = dict(os.environ)
-        # Keep git from picking up an inherited GIT_INDEX_FILE from a parent
+        # Keep git from picking up inherited config or an index from a parent
         # (e.g. when stepback itself is launched from inside a git hook).
         env.pop("GIT_INDEX_FILE", None)
+        env.pop("GIT_DIR", None)
+        env.pop("GIT_WORK_TREE", None)
         if index is not None:
             env["GIT_INDEX_FILE"] = str(index)
         if commit_identity:
             env.update(_COMMIT_ENV)
-        proc = subprocess.run(
-            cmd,
-            cwd=str(self.work_tree),
-            env=env,
-            input=text_input,
-            capture_output=True,
-            text=True,
-        )
+        try:
+            proc = subprocess.run(
+                cmd,
+                cwd=str(self.work_tree),
+                env=env,
+                input=text_input,
+                capture_output=True,
+                text=True,
+            )
+        except FileNotFoundError as exc:
+            raise GitError("git executable not found on PATH") from exc
         if check and proc.returncode != 0:
             raise GitError(
                 f"git {' '.join(args)} failed ({proc.returncode}): {proc.stderr.strip()}"
@@ -130,7 +148,10 @@ class Repo:
 
 
 def _run(cmd: list[str], cwd: Path) -> subprocess.CompletedProcess:
-    return subprocess.run(cmd, cwd=str(cwd), capture_output=True, text=True)
+    try:
+        return subprocess.run(cmd, cwd=str(cwd), capture_output=True, text=True)
+    except FileNotFoundError as exc:
+        raise GitError("git executable not found on PATH") from exc
 
 
 def resolve_repo(path: Path) -> Repo:
@@ -141,22 +162,36 @@ def resolve_repo(path: Path) -> Repo:
     private shadow object database is created (shadow mode).
     """
     path = path.resolve()
+    if not path.exists():
+        raise GitError(f"path does not exist: {path}")
 
-    top = _run(["git", "rev-parse", "--show-toplevel"], path)
-    if top.returncode == 0 and top.stdout.strip():
-        work_tree = Path(top.stdout.strip())
-        gd = _run(["git", "rev-parse", "--absolute-git-dir"], work_tree)
-        git_dir = Path(gd.stdout.strip())
-        return Repo(work_tree=work_tree, git_dir=git_dir, mode="shared")
+    # Only treat as a real repo when we are inside its *work tree*.  A bare repo,
+    # or being inside the ``.git`` directory itself, has no work tree to
+    # checkpoint, so fall through to a private shadow store instead.
+    inside = _run(["git", "rev-parse", "--is-inside-work-tree"], path)
+    if inside.returncode == 0 and inside.stdout.strip() == "true":
+        top = _run(["git", "rev-parse", "--show-toplevel"], path)
+        if top.returncode == 0 and top.stdout.strip():
+            work_tree = Path(top.stdout.strip())
+            gd = _run(["git", "rev-parse", "--absolute-git-dir"], work_tree)
+            git_dir = Path(gd.stdout.strip())
+            return Repo(work_tree=work_tree, git_dir=git_dir, mode="shared")
 
     # Shadow mode: private object DB under .stepback/shadow.git
     work_tree = path
     git_dir = work_tree / ".stepback" / "shadow.git"
     if not (git_dir / "HEAD").exists():
         git_dir.parent.mkdir(parents=True, exist_ok=True)
-        init = _run(["git", "init", "--bare", "--quiet", str(git_dir)], work_tree)
-        if init.returncode != 0:
-            raise GitError(f"could not init shadow repo: {init.stderr.strip()}")
+        # Guard against two stepback processes initialising the same shadow
+        # store at once (the template copy is not race-safe): serialise on a
+        # lock in the parent dir and re-check after acquiring it.
+        with file_lock(work_tree / ".stepback" / "init.lock"):
+            if not (git_dir / "HEAD").exists():
+                init = _run(
+                    ["git", "init", "--bare", "--quiet", str(git_dir)], work_tree
+                )
+                if init.returncode != 0 and not (git_dir / "HEAD").exists():
+                    raise GitError(f"could not init shadow repo: {init.stderr.strip()}")
     # Never let the shadow store snapshot itself.
     info = git_dir / "info"
     info.mkdir(exist_ok=True)
