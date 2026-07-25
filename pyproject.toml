@@ -4,21 +4,21 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "stepback"
-version = "0.1.0"
-description = "git time-travel for any AI coding agent — undo a bad Codex/Claude/aider session in one command."
+version = "0.1.1"
+description = "Git time-travel for AI coding agents — checkpoint and rewind Claude Code, Codex, aider, or any command."
 readme = "README.md"
 requires-python = ">=3.11"
-license = { text = "MIT" }
+license = "MIT"
 authors = [{ name = "Krishi Attri", email = "krishiattriwork@gmail.com" }]
 keywords = [
     "ai", "coding-agent", "checkpoint", "rewind", "undo", "git",
     "claude-code", "codex", "aider", "time-travel", "snapshot", "watchdog",
+    "agentic-coding", "developer-tools", "rollback", "vibe-coding",
 ]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Environment :: Console",
     "Intended Audience :: Developers",
-    "License :: OSI Approved :: MIT License",
     "Operating System :: POSIX",
     "Operating System :: MacOS",
     "Programming Language :: Python :: 3",
@@ -45,6 +45,8 @@ Homepage = "https://github.com/Archerkattri/stepback"
 Source = "https://github.com/Archerkattri/stepback"
 Issues = "https://github.com/Archerkattri/stepback/issues"
 Changelog = "https://github.com/Archerkattri/stepback/blob/master/CHANGELOG.md"
+Documentation = "https://github.com/Archerkattri/stepback#readme"
+DOI = "https://doi.org/10.5281/zenodo.21536384"
 
 [project.scripts]
 stepback = "stepback.cli:main"

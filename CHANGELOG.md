@@ -6,6 +6,15 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-07-25
+
+### Changed
+- Sharpened the project landing page, install path, package metadata, and
+  discovery keywords for the public launch.
+- Added a reusable visual walkthrough of the checkpoint-and-rewind workflow.
+
+## [0.1.0] - 2026-07-24
+
 ### Added
 - Atomic, minimal restore: only files that differ are touched, wanted versions
   are staged first, and each is moved into place with a same-filesystem rename,
@@ -41,8 +50,6 @@ All notable changes to this project are documented here. The format is based on
   copy.
 - Symlinks are stored and restored as symlinks.
 - A missing `git` binary produces a clean error instead of a traceback.
-
-## [0.1.0]
 
 Initial working version: git shadow-ref file checkpoints with isolated index,
 exact restore, redo, no-git shadow store, debounced watcher, Typer CLI

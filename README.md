@@ -1,14 +1,25 @@
-# stepback
+<p align="center">
+  <img src="assets/stepback-hero.svg" alt="stepback — rewind any AI coding agent" width="100%">
+</p>
 
-[![PyPI](https://img.shields.io/pypi/v/stepback)](https://pypi.org/project/stepback/)
-[![Python](https://img.shields.io/pypi/pyversions/stepback)](https://pypi.org/project/stepback/)
-[![Downloads](https://static.pepy.tech/badge/stepback)](https://pepy.tech/project/stepback)
-[![CI](https://github.com/Archerkattri/stepback/actions/workflows/ci.yml/badge.svg)](https://github.com/Archerkattri/stepback/actions/workflows/ci.yml)
-[![License: MIT](https://img.shields.io/pypi/l/stepback)](LICENSE)
-[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.21536385.svg)](https://doi.org/10.5281/zenodo.21536385)
+<p align="center">
+  <a href="https://pypi.org/project/stepback/"><img src="https://img.shields.io/pypi/v/stepback?style=flat-square" alt="PyPI"></a>
+  <a href="https://pypi.org/project/stepback/"><img src="https://img.shields.io/pypi/pyversions/stepback?style=flat-square" alt="Python"></a>
+  <a href="https://pepy.tech/project/stepback"><img src="https://static.pepy.tech/badge/stepback?style=flat-square" alt="Lifetime downloads"></a>
+  <a href="https://github.com/Archerkattri/stepback/actions/workflows/ci.yml"><img src="https://github.com/Archerkattri/stepback/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/pypi/l/stepback?style=flat-square" alt="MIT license"></a>
+  <a href="https://doi.org/10.5281/zenodo.21536384"><img src="https://zenodo.org/badge/DOI/10.5281/zenodo.21536384.svg" alt="DOI"></a>
+</p>
 
-git time-travel for any AI coding agent. Undo a bad Codex/Claude/aider session
-in one command, no matter which tool made the mess.
+**Git time-travel for AI coding agents.** Wrap Claude Code, Codex, aider, or
+any command; StepBack checkpoints every settled edit burst and rewinds the
+working tree exactly—with best-effort conversation rewind—without touching
+your branch, `HEAD`, index, staging area, or commit history.
+
+```console
+pip install stepback
+stepback run -- codex       # also: claude, aider, or any command
+```
 
 AI coding agents are useful until they aren't. One bad turn and your working
 tree is full of half-broken edits and a junk file or two. `git stash` doesn't
@@ -113,7 +124,7 @@ snapshot / restore / resume_hint` (see `ARCHITECTURE.md`).
 ## Install
 
 ```console
-pip install stepback        # once published
+pip install stepback
 # or, from source:
 pip install .
 # for development (tests, ruff, mypy):
@@ -170,6 +181,9 @@ pytest -q
 ```
 
 See `CONTRIBUTING.md` for the layout and `ARCHITECTURE.md` for how it works.
+
+If StepBack saves an agent session, [star the repository](https://github.com/Archerkattri/stepback)
+so the next developer can find it.
 
 ## License
 

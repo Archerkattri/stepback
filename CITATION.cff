@@ -1,0 +1,19 @@
+cff-version: 1.2.0
+message: "If StepBack helps your work, please cite it using this metadata."
+title: "stepback: checkpoint and rewind for AI coding agents"
+type: software
+authors:
+  - family-names: Attri
+    given-names: Krishi
+version: 0.1.1
+date-released: 2026-07-25
+url: "https://github.com/Archerkattri/stepback"
+repository-code: "https://github.com/Archerkattri/stepback"
+doi: 10.5281/zenodo.21536384
+license: MIT
+keywords:
+  - AI coding agents
+  - checkpoint
+  - rewind
+  - git
+  - developer tools
