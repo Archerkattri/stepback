@@ -5,7 +5,7 @@
 <p align="center">
   <a href="https://pypi.org/project/stepback/"><img src="https://img.shields.io/pypi/v/stepback?style=flat-square" alt="PyPI"></a>
   <a href="https://pypi.org/project/stepback/"><img src="https://img.shields.io/pypi/pyversions/stepback?style=flat-square" alt="Python"></a>
-  <a href="https://pepy.tech/project/stepback"><img src="https://static.pepy.tech/badge/stepback?style=flat-square" alt="Lifetime downloads"></a>
+  <a href="https://pypi.org/project/stepback/"><img src="https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fraw.githubusercontent.com%2FArcherkattri%2FArcherkattri%2Fmaster%2Fassets%2Fstats.json&query=%24.pypi_projects.stepback&label=lifetime%20downloads&style=flat-square&color=2f9e44" alt="Lifetime downloads"></a>
   <a href="https://github.com/Archerkattri/stepback/actions/workflows/ci.yml"><img src="https://github.com/Archerkattri/stepback/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <a href="LICENSE"><img src="https://img.shields.io/pypi/l/stepback?style=flat-square" alt="MIT license"></a>
   <a href="https://doi.org/10.5281/zenodo.21536384"><img src="https://zenodo.org/badge/DOI/10.5281/zenodo.21536384.svg" alt="DOI"></a>
