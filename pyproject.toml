@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "stepback"
-version = "0.1.1"
+version = "0.1.2"
 description = "Git time-travel for AI coding agents — checkpoint and rewind Claude Code, Codex, aider, or any command."
 readme = "README.md"
 requires-python = ">=3.11"

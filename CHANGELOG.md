@@ -6,6 +6,12 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-07-25
+
+### Fixed
+- Replaced Pepy's not-yet-indexed new-package badge with the profile's own
+  live per-package lifetime-download counter.
+
 ## [0.1.1] - 2026-07-25
 
 ### Changed
