@@ -40,6 +40,11 @@ $ stepback restore 6 --path src/     # restore only one subtree; leave other edi
 ```
 
 ## Why this exists (and how it's different)
+## Architecture at a glance
+
+![stepback-current architecture](assets/readme_flow.svg)
+
+StepBack observes settled edit bursts, records the file state, and rewinds only the working tree when the selected checkpoint is restored.
 
 A handful of "undo my AI agent" tools already exist (walkback, doover, bashback,
 and others). They share two limits that `stepback` is built to beat:
