@@ -137,6 +137,7 @@ class Repo:
                 input=text_input,
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
             )
         except FileNotFoundError as exc:
             raise GitError("git executable not found on PATH") from exc
@@ -149,7 +150,9 @@ class Repo:
 
 def _run(cmd: list[str], cwd: Path) -> subprocess.CompletedProcess:
     try:
-        return subprocess.run(cmd, cwd=str(cwd), capture_output=True, text=True)
+        return subprocess.run(
+            cmd, cwd=str(cwd), capture_output=True, text=True, encoding="utf-8"
+        )
     except FileNotFoundError as exc:
         raise GitError("git executable not found on PATH") from exc
 

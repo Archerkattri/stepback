@@ -81,6 +81,78 @@ def test_redo_empty_returns_none(tmp_path: Path):
     assert entry is None and hints == []
 
 
+def test_selective_restore_changes_only_requested_paths_and_is_redoable(tmp_path: Path):
+    (tmp_path / "a.txt").write_text("a1\n")
+    (tmp_path / "b.txt").write_text("b1\n")
+    (tmp_path / "nested").mkdir()
+    (tmp_path / "nested" / "c.txt").write_text("c1\n")
+    eng = Engine(tmp_path)
+    cp = eng.checkpoint(label="baseline")
+
+    (tmp_path / "a.txt").write_text("a2\n")
+    (tmp_path / "b.txt").write_text("b2\n")
+    (tmp_path / "nested" / "c.txt").write_text("c2\n")
+    plan = eng.plan_restore_paths(cp.tree, ["a.txt", "nested"])
+    assert set(plan.paths) == {"a.txt", "nested/c.txt"}
+    assert plan.changed == 2
+
+    eng.restore_paths(cp, ["a.txt", "nested"])
+    assert (tmp_path / "a.txt").read_text() == "a1\n"
+    assert (tmp_path / "nested" / "c.txt").read_text() == "c1\n"
+    assert (tmp_path / "b.txt").read_text() == "b2\n"
+
+    entry, _ = eng.redo()
+    assert entry is not None
+    assert (tmp_path / "a.txt").read_text() == "a2\n"
+    assert (tmp_path / "b.txt").read_text() == "b2\n"
+    assert (tmp_path / "nested" / "c.txt").read_text() == "c2\n"
+
+
+def test_selective_restore_rejects_escape_and_unknown_path(tmp_path: Path):
+    (tmp_path / "a.txt").write_text("a\n")
+    eng = Engine(tmp_path)
+    cp = eng.checkpoint()
+    for bad in ("../outside", "missing.txt", ""):
+        try:
+            eng.plan_restore_paths(cp.tree, [bad])
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(f"expected ValueError for {bad!r}")
+
+
+def test_interrupted_selective_restore_is_recoverable_from_fresh_engine(tmp_path: Path, monkeypatch):
+    (tmp_path / "a.txt").write_text("a1\n")
+    (tmp_path / "b.txt").write_text("b1\n")
+    eng = Engine(tmp_path)
+    cp = eng.checkpoint(label="baseline")
+    (tmp_path / "a.txt").write_text("a2\n")
+    (tmp_path / "b.txt").write_text("b2\n")
+
+    original = eng._restore_tree_paths
+
+    def fail_after_partial(target_tree, paths):
+        (tmp_path / "a.txt").write_text("partial\n")
+        raise RuntimeError("injected interruption")
+
+    monkeypatch.setattr(eng, "_restore_tree_paths", fail_after_partial)
+    try:
+        eng.restore_paths(cp, ["a.txt"])
+    except RuntimeError as exc:
+        assert "injected interruption" in str(exc)
+    else:
+        raise AssertionError("injected restore should fail")
+    assert eng.pending_operation() is not None
+
+    fresh = Engine(tmp_path)
+    recovered = fresh.recover_pending()
+    assert recovered is not None
+    assert recovered.operation == "selective-restore"
+    assert (tmp_path / "a.txt").read_text() == "a2\n"
+    assert (tmp_path / "b.txt").read_text() == "b2\n"
+    assert fresh.pending_operation() is None
+
+
 def test_binary_roundtrip_is_byte_exact(tmp_path: Path):
     blob = bytes(range(256)) * 40  # includes NUL bytes
     (tmp_path / "data.bin").write_bytes(blob)

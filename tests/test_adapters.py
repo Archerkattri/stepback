@@ -5,6 +5,7 @@ These use fake HOME directories so no real Claude Code / Codex state is touched.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from stepback.adapters import adapter_by_name, detect_adapters
@@ -62,13 +63,15 @@ def test_codex_adapter_degrades_when_absent(tmp_path: Path):
 
 
 def test_codex_adapter_snapshot_and_restore(tmp_path: Path):
+    work = tmp_path / "work"
+    work.mkdir()
     home = tmp_path / "home"
     sessions = home / ".codex" / "sessions" / "2026" / "07" / "24"
     sessions.mkdir(parents=True)
     sess = sessions / "rollout-abc.jsonl"
-    sess.write_text("turn1\n")
+    sess.write_text(json.dumps({"type": "session_meta", "payload": {"id": "abc", "cwd": str(work)}}) + "\nturn1\n")
 
-    a = CodexAdapter(tmp_path, home=home)
+    a = CodexAdapter(work, home=home)
     assert a.detect() is True
 
     dest = tmp_path / "snap"
@@ -76,9 +79,12 @@ def test_codex_adapter_snapshot_and_restore(tmp_path: Path):
     assert meta["session_file"] == "rollout-abc.jsonl"
     assert "codex" in a.resume_hint(meta)
 
-    sess.write_text("turn1\nturn2-bad\n")
+    sess.write_text(
+        json.dumps({"type": "session_meta", "payload": {"id": "abc", "cwd": str(work)}})
+        + "\nturn1\nturn2-bad\n"
+    )
     assert a.restore(meta, dest) is True
-    assert sess.read_text() == "turn1\n"  # restored to the exact spot
+    assert sess.read_text().endswith("turn1\n")  # restored to the exact spot
 
 
 def test_claude_adapter_picks_most_recent_transcript(tmp_path: Path):
@@ -108,13 +114,97 @@ def test_detect_adapters_finds_codex(tmp_path: Path, monkeypatch):
     home = tmp_path / "home"
     sessions = home / ".codex" / "sessions"
     sessions.mkdir(parents=True)
-    (sessions / "s.jsonl").write_text("x\n")
+    (sessions / "s.jsonl").write_text(
+        json.dumps({"type": "session_meta", "payload": {"id": "s", "cwd": str(tmp_path)}})
+        + "\n"
+    )
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.setenv("USERPROFILE", str(home))
     names = {a.name for a in detect_adapters(tmp_path)}
     assert "codex" in names
     assert adapter_by_name("codex", tmp_path) is not None
     assert adapter_by_name("nonexistent", tmp_path) is None
+
+
+def _codex_session(path: Path, *, session_id: str, cwd: Path) -> None:
+    path.write_text(
+        json.dumps({"type": "session_meta", "payload": {"id": session_id, "cwd": str(cwd)}})
+        + "\nturn\n"
+    )
+
+
+def test_codex_session_is_bound_to_exact_work_tree_not_mtime(tmp_path: Path):
+    home = tmp_path / "home"
+    sessions = home / ".codex" / "sessions" / "2026" / "07" / "24"
+    sessions.mkdir(parents=True)
+    project_a = tmp_path / "project-a"
+    project_b = tmp_path / "project-b"
+    project_a.mkdir()
+    project_b.mkdir()
+    session_a = sessions / "a.jsonl"
+    session_b = sessions / "b.jsonl"
+    _codex_session(session_a, session_id="a", cwd=project_a)
+    _codex_session(session_b, session_id="b", cwd=project_b)
+    import os
+    import time
+
+    now = time.time()
+    os.utime(session_a, (now - 100, now - 100))
+    os.utime(session_b, (now, now))
+
+    adapter = CodexAdapter(project_a, home=home)
+    assert adapter.session_files() == [session_a]
+    assert adapter.snapshot(tmp_path / "snap")["session_id"] == "a"
+
+
+def test_codex_ambiguous_project_sessions_degrade_to_file_only(tmp_path: Path):
+    home = tmp_path / "home"
+    sessions = home / ".codex" / "sessions"
+    sessions.mkdir(parents=True)
+    _codex_session(sessions / "a.jsonl", session_id="a", cwd=tmp_path)
+    _codex_session(sessions / "b.jsonl", session_id="b", cwd=tmp_path)
+    adapter = CodexAdapter(tmp_path, home=home)
+    assert adapter.detect() is False
+    assert adapter.snapshot(tmp_path / "snap") == {}
+
+
+def test_codex_explicit_session_selection_is_supported(tmp_path: Path):
+    home = tmp_path / "home"
+    sessions = home / ".codex" / "sessions"
+    sessions.mkdir(parents=True)
+    first = sessions / "first.jsonl"
+    second = sessions / "second.jsonl"
+    _codex_session(first, session_id="first", cwd=tmp_path)
+    _codex_session(second, session_id="second", cwd=tmp_path)
+    adapter = CodexAdapter(tmp_path, home=home, session_id="second")
+    assert adapter.session_files() == [second]
+
+
+def test_codex_unrecognized_metadata_is_not_selected(tmp_path: Path):
+    home = tmp_path / "home"
+    sessions = home / ".codex" / "sessions"
+    sessions.mkdir(parents=True)
+    (sessions / "unknown.jsonl").write_text("turn without session metadata\n")
+    adapter = CodexAdapter(tmp_path, home=home)
+    assert adapter.detect() is False
+
+
+def test_codex_restore_rejects_traversal_and_work_tree_mismatch(tmp_path: Path):
+    home = tmp_path / "home"
+    sessions = home / ".codex" / "sessions"
+    sessions.mkdir(parents=True)
+    adapter = CodexAdapter(tmp_path, home=home)
+    src = tmp_path / "snap"
+    src.mkdir()
+    (src / "session.jsonl").write_text("saved\n")
+    meta = {"session_file": "session.jsonl", "rel_path": "../escape.jsonl"}
+    assert adapter.restore(meta, src) is False
+    meta = {
+        "session_file": "session.jsonl",
+        "rel_path": "session.jsonl",
+        "work_tree": str(tmp_path / "other"),
+    }
+    assert adapter.restore(meta, src) is False
 
 
 class _ExplodingAdapter:

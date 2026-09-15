@@ -6,6 +6,20 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Fixed
+- Use kernel-owned file locks on Windows and remove unsafe age-based stale-lock
+  deletion; lock ownership is released by the operating system.
+- Make watcher status liveness checks non-destructive on Windows, reject known
+  PID reuse, and keep restore suppression active for the full restore duration.
+- Surface contained watcher checkpoint failures through the CLI instead of
+  silently losing the diagnostic.
+
+### Added
+- Write-ahead restore journal with explicit `stepback recover` recovery for
+  interrupted file rewinds, selective restores and redo operations.
+- Fault-injection coverage for fresh-process recovery after a partial selective
+  restore, plus a documented file-only recovery contract.
+
 ## [0.1.2] - 2026-07-25
 
 ### Fixed
@@ -61,3 +75,8 @@ Initial working version: git shadow-ref file checkpoints with isolated index,
 exact restore, redo, no-git shadow store, debounced watcher, Typer CLI
 (run/list/rewind/redo/diff/status), and best-effort Claude Code and Codex
 conversation adapters.
+## Unreleased
+
+- Add redo-able selective restore with `stepback restore <id> --path ...`.
+- Validate relative paths, expand directory selections, stage selected files
+  before promotion, and verify unselected files remain unchanged.

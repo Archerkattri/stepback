@@ -36,6 +36,7 @@ $ stepback list
 $ stepback rewind 6                 # preview the diff, confirm, done
   restored to checkpoint #6.  (`stepback redo` to undo this rewind)
     resume conversation:  claude --resume 9f3c...
+$ stepback restore 6 --path src/     # restore only one subtree; leave other edits intact
 ```
 
 ## Why this exists (and how it's different)
@@ -76,15 +77,21 @@ burst settles. Snapshots are content-addressed git objects stored under
   trees (it is git).
 - **Atomic.** A restore stages the wanted file versions first, then moves them
   into place with same-filesystem renames, so a crash can never leave a
-  half-written file. The pre-rewind state is committed, ref-protected (safe from
-  your own `git gc`), and saved before anything destructive happens, so an
-  interrupted rewind is always recoverable with `stepback redo`.
+  half-written file. A write-ahead journal records the operation and a
+  ref-protected pre-operation tree before anything destructive happens, so an
+  interrupted restore can be explicitly recovered with `stepback recover`.
+  Successful rewinds remain reversible with `stepback redo`.
 - **Safe.** Rewind shows a diff preview and asks for confirmation before
   changing anything, and pushes your current state onto a redo stack so a rewind
   is itself reversible. `--dry-run` shows the plan without touching the tree.
-- **Concurrency-safe.** Mutating operations take a cross-process advisory lock,
-  and a rewind briefly tells a running watcher to ignore the events it causes,
-  so a watcher and a manual `rewind` in another terminal never corrupt state.
+- **Selective.** `stepback restore <id> --path FILE` restores one or more files
+  or subtrees from a checkpoint, verifies that unselected paths did not move,
+  and keeps the operation redo-able. Conversation state is intentionally not
+  rewound for a file-only selection.
+- **Concurrency-safe.** Mutating operations take an OS-owned cross-process
+  advisory lock (`flock` on POSIX and `LockFileEx` on Windows), and a rewind
+  tells a running watcher to ignore restore events for the full operation, so a
+  watcher and a manual `rewind` in another terminal never corrupt state.
 - **Works without git too.** Outside a git repo, stepback creates a private
   object store at `.stepback/shadow.git` and uses the identical machinery.
 
@@ -103,7 +110,7 @@ what lets you rewind the conversation, not just the code.
 | Agent | Adapter | State captured | Resume hint | Status |
 |---|---|---|---|---|
 | Claude Code | `claude-code` | active transcript `~/.claude/projects/<slug>/<uuid>.jsonl` | `claude --resume <uuid>` | best-effort |
-| Codex CLI | `codex` | most-recent session under `~/.codex/sessions/` | `codex resume` | best-effort |
+| Codex CLI | `codex` | one recognized session whose metadata matches this work tree | `codex resume` | best-effort |
 | others | none | none | none | file-only rewind |
 
 Adding an agent is one small class implementing `detect / session_files /
@@ -118,8 +125,9 @@ snapshot / restore / resume_hint` (see `ARCHITECTURE.md`).
 - **Best-effort:** conversation snapshot/restore for Claude Code and Codex
   (private formats, may break on agent updates, degrades to file-only).
 - **Degrades gracefully:** if the OS file-watch limit is hit, stepback falls
-  back to a polling watcher, then to start/end-only checkpoints. It never takes
-  down the agent it's watching.
+  back to a polling watcher, then to start/end-only checkpoints. Checkpoint
+  failures remain contained from the agent but are reported by the CLI. It
+  never takes down the agent it's watching.
 
 ## Install
 
@@ -149,7 +157,10 @@ stepback diff <id>         # what a checkpoint changed (add -w to diff vs workin
 stepback rewind [id]       # preview + restore (defaults to the most recent checkpoint)
 stepback rewind <id> -n    # dry run: show the plan, change nothing
 stepback rewind <id> -y    # skip the confirmation
+stepback restore [id] -p src/app.py -p tests/  # restore selected paths only
+stepback restore [id] -n -p src/              # preview selected restore
 stepback redo              # reverse the last rewind
+stepback recover           # recover an interrupted file restore
 ```
 
 Exit codes: `0` success, `1` expected failure (no such checkpoint, nothing to
@@ -161,13 +172,16 @@ redo, aborted), `2` bad invocation, `127` agent command not found.
   `node_modules`) are not captured or restored. This is usually what you want.
   It's called out here so it's never a surprise.
 - Layer 2 conversation formats are private to each agent and can break on any
-  update. Treat conversation rewind as a bonus, not a guarantee.
+  update. Codex capture requires recognized session metadata with an exact
+  work-tree match; unsupported or ambiguous sessions deliberately degrade to
+  file-only rewind. Treat conversation rewind as a bonus, not a guarantee.
 - Restoring overwrites the current working tree for tracked/non-ignored files
   (after the diff preview and your confirmation).
-- A restore is crash-recoverable via the redo stack rather than a single atomic
-  syscall: individual files are replaced atomically, and the pre-rewind state is
-  durably saved first, so an interrupted rewind is recovered with `stepback
-  redo`.
+- A restore is not one filesystem-wide atomic syscall. Individual files are
+  replaced atomically, the final tree is verified, and a write-ahead journal
+  makes interrupted file restores explicitly recoverable with `stepback recover`.
+  Successful rewinds are still reversible with `stepback redo`. Conversation
+  adapters and external services are outside this file transaction.
 - Any stepback command resolves storage for the current directory, so running
   one outside a git repo creates a `.stepback/` directory there.
 
@@ -188,3 +202,11 @@ so the next developer can find it.
 ## License
 
 MIT (c) 2026 Krishi Attri
+
+## Current release status
+
+The current release includes selective file/subtree restore, write-ahead
+journalling, fresh-process recovery, untouched-path verification, atomic
+promotion and durable redo. The full suite passes 85 tests with 1 existing
+Windows symlink skip; conversation-layer rewind remains adapter/platform
+dependent.

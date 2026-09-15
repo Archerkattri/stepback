@@ -8,8 +8,11 @@ best-effort adapters and is strictly optional.
 
 from __future__ import annotations
 
+import json
 import os
+import posixpath
 import shutil
+import tempfile
 import time
 import uuid
 from collections.abc import Iterator
@@ -20,6 +23,7 @@ from pathlib import Path
 
 from .adapters import AgentAdapter, adapter_by_name
 from .errors import RestoreError
+from .journal import OperationJournal
 from .lock import file_lock
 from .repo import EMPTY_TREE, GitError, Repo, resolve_repo
 from .store import Checkpoint, RedoEntry, State
@@ -47,6 +51,20 @@ class RestorePlan:
         return self.changed == 0
 
 
+@dataclass
+class SelectiveRestorePlan:
+    """A preview of restoring only selected paths from a checkpoint."""
+
+    target_tree: str
+    paths: tuple[str, ...]
+    stat: str
+    changed: int
+
+    @property
+    def is_noop(self) -> bool:
+        return self.changed == 0
+
+
 class Engine:
     def __init__(self, work_tree: Path, adapters: list[AgentAdapter] | None = None):
         self.repo: Repo = resolve_repo(Path(work_tree))
@@ -54,12 +72,72 @@ class Engine:
         self.state = State.load(self.state_path)
         self.sessions_root = self.repo.meta_dir / "sessions"
         self.pause_path = self.repo.meta_dir / "paused"
+        self.restore_path = self.repo.meta_dir / "restore.pid"
+        self.journal_path = self.repo.meta_dir / "operation.json"
+        self._watch_marker: str | None = None
+        self._restore_marker: str | None = None
         self.adapters = adapters if adapters is not None else []
 
     # -- persistence --------------------------------------------------------
 
     def _save(self) -> None:
         self.state.save(self.state_path)
+
+    def pending_operation(self) -> OperationJournal | None:
+        """Return an unfinished file-restore operation, if one is recorded."""
+        return OperationJournal.load(self.journal_path)
+
+    def _begin_journal(
+        self,
+        operation: str,
+        *,
+        pre_tree: str,
+        target_tree: str,
+        selected_paths: tuple[str, ...] = (),
+    ) -> OperationJournal:
+        journal = OperationJournal.begin(
+            operation,
+            started_at=_now_iso(),
+            pre_tree=pre_tree,
+            target_tree=target_tree,
+            selected_paths=selected_paths,
+        )
+        journal.save(self.journal_path)
+        return journal
+
+    def _finish_journal(self, journal: OperationJournal) -> None:
+        OperationJournal.clear(self.journal_path)
+
+    def recover_pending(self) -> OperationJournal | None:
+        """Restore the pre-operation file tree recorded by a stale journal.
+
+        This is intentionally an explicit command: an interrupted process must
+        not silently rewrite user files when a new StepBack process starts.
+        """
+        self._begin_restore()
+        self.pause()
+        try:
+            with self._transaction():
+                journal = OperationJournal.load(self.journal_path)
+                if journal is None:
+                    return None
+                try:
+                    if journal.selected_paths:
+                        self._restore_tree_paths(journal.pre_tree, journal.selected_paths)
+                    else:
+                        self._restore_tree(journal.pre_tree)
+                    journal.advance(self.journal_path, "recovered")
+                    if journal.recovery_ref:
+                        self.repo.git("update-ref", "-d", journal.recovery_ref, check=False)
+                    OperationJournal.clear(self.journal_path)
+                    self._save()
+                    return journal
+                except Exception as exc:
+                    journal.advance(self.journal_path, "recovery-failed", error=f"{type(exc).__name__}: {exc}")
+                    raise
+        finally:
+            self._end_restore()
+            self.pause()
 
     @contextmanager
     def _transaction(self) -> Iterator[None]:
@@ -85,12 +163,170 @@ class Engine:
         except OSError:
             pass
 
+    def _process_identity(self, pid: int) -> str | None:
+        """Return a process-start identity where the platform exposes one."""
+        if os.name == "nt":
+            # QueryLimitedInformation/GetProcessTimes are read-only and do not
+            # send a signal.  The creation time also lets status reject PID
+            # reuse instead of mistaking a new process for our watcher.
+            try:
+                import ctypes
+                from ctypes import wintypes
+
+                kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+                kernel32.OpenProcess.argtypes = [
+                    wintypes.DWORD,
+                    wintypes.BOOL,
+                    wintypes.DWORD,
+                ]
+                kernel32.OpenProcess.restype = wintypes.HANDLE
+                kernel32.GetProcessTimes.argtypes = [
+                    wintypes.HANDLE,
+                    ctypes.POINTER(wintypes.FILETIME),
+                    ctypes.POINTER(wintypes.FILETIME),
+                    ctypes.POINTER(wintypes.FILETIME),
+                    ctypes.POINTER(wintypes.FILETIME),
+                ]
+                kernel32.GetProcessTimes.restype = wintypes.BOOL
+                kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+                kernel32.CloseHandle.restype = wintypes.BOOL
+                handle = kernel32.OpenProcess(0x1000, False, pid)
+                if not handle:
+                    return None
+                try:
+                    created = wintypes.FILETIME()
+                    exited = wintypes.FILETIME()
+                    kernel = wintypes.FILETIME()
+                    user = wintypes.FILETIME()
+                    if not kernel32.GetProcessTimes(
+                        handle,
+                        ctypes.byref(created),
+                        ctypes.byref(exited),
+                        ctypes.byref(kernel),
+                        ctypes.byref(user),
+                    ):
+                        return None
+                    return f"{created.dwHighDateTime:08x}{created.dwLowDateTime:08x}"
+                finally:
+                    kernel32.CloseHandle(handle)
+            except (OSError, AttributeError):
+                return None
+
+        # Linux exposes a monotonic process start tick in /proc.  macOS does
+        # not provide an equally portable stdlib query, so liveness there is
+        # reported conservatively when no identity is available.
+        try:
+            stat = Path(f"/proc/{pid}/stat").read_text()
+            rest = stat[stat.rfind(")") + 2 :].split()
+            return rest[19] if len(rest) > 19 else None
+        except (OSError, ValueError):
+            return None
+
+    def _process_alive(self, pid: int) -> bool | None:
+        """Read process liveness without sending a signal on Windows."""
+        if os.name == "nt":
+            try:
+                import ctypes
+                from ctypes import wintypes
+
+                kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+                kernel32.OpenProcess.argtypes = [
+                    wintypes.DWORD,
+                    wintypes.BOOL,
+                    wintypes.DWORD,
+                ]
+                kernel32.OpenProcess.restype = wintypes.HANDLE
+                kernel32.GetExitCodeProcess.argtypes = [
+                    wintypes.HANDLE,
+                    ctypes.POINTER(ctypes.c_ulong),
+                ]
+                kernel32.GetExitCodeProcess.restype = wintypes.BOOL
+                kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+                kernel32.CloseHandle.restype = wintypes.BOOL
+                handle = kernel32.OpenProcess(0x1000, False, pid)
+                if not handle:
+                    error = ctypes.get_last_error()
+                    # ERROR_INVALID_PARAMETER means the PID does not exist;
+                    # access denied is unknown, not proof of a dead process.
+                    return False if error == 87 else None
+                try:
+                    code = ctypes.c_ulong()
+                    if not kernel32.GetExitCodeProcess(handle, ctypes.byref(code)):
+                        return None
+                    return code.value == 259  # STILL_ACTIVE
+                finally:
+                    kernel32.CloseHandle(handle)
+            except (OSError, AttributeError):
+                return None
+
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return False
+        except PermissionError:
+            return None
+        except OSError:
+            return None
+        return True
+
+    def _write_owner_marker(self, path: Path, marker: str) -> None:
+        """Publish a marker atomically so readers never see a partial line."""
+        tmp = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+        try:
+            tmp.write_text(marker)
+            os.replace(tmp, path)
+        finally:
+            tmp.unlink(missing_ok=True)
+
+    def _begin_restore(self) -> None:
+        pid = os.getpid()
+        identity = self._process_identity(pid) or "-"
+        self._restore_marker = f"{pid} {identity}"
+        try:
+            self._write_owner_marker(self.restore_path, self._restore_marker)
+        except OSError:
+            self._restore_marker = None
+
+    def _end_restore(self) -> None:
+        marker = self._restore_marker
+        self._restore_marker = None
+        if marker is None:
+            return
+        try:
+            if self.restore_path.read_text() == marker:
+                self.restore_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+
     def is_paused(self) -> bool:
         """True if a rewind/redo recently asked the watcher to hold off."""
+        # A deadline is intentionally only a trailing-event grace period.  The
+        # owner marker covers restores longer than that grace period and is
+        # released by the owner (or recognized as dead after a crash).
         try:
-            return time.time() < float(self.pause_path.read_text().strip())
+            if time.time() < float(self.pause_path.read_text().strip()):
+                return True
+        except (OSError, ValueError):
+            pass
+        try:
+            raw = self.restore_path.read_text().strip().split()
+            if len(raw) < 2:
+                return False
+            pid, identity = int(raw[0]), raw[1]
         except (OSError, ValueError):
             return False
+        alive = self._process_alive(pid)
+        current_identity = self._process_identity(pid)
+        if alive is False or (
+            current_identity is not None and identity != "-" and current_identity != identity
+        ):
+            try:
+                if self.restore_path.read_text().strip() == " ".join(raw):
+                    self.restore_path.unlink(missing_ok=True)
+            except OSError:
+                pass
+            return False
+        return alive is not False
 
     # -- watcher heartbeat (for `status`) ----------------------------------
 
@@ -98,22 +334,103 @@ class Engine:
     def _watch_pid_path(self) -> Path:
         return self.repo.meta_dir / "watcher.pid"
 
-    def mark_watching(self) -> None:
+    @property
+    def _watch_status_path(self) -> Path:
+        return self.repo.meta_dir / "watcher.status.json"
+
+    def _load_watcher_status(self) -> dict:
         try:
-            self._watch_pid_path.write_text(f"{os.getpid()} {_now_iso()}")
+            data = json.loads(self._watch_status_path.read_text())
+            return data if isinstance(data, dict) else {}
+        except (OSError, ValueError):
+            return {}
+
+    def _save_watcher_status(self, data: dict) -> None:
+        tmp = self._watch_status_path.with_name(
+            f".{self._watch_status_path.name}.{uuid.uuid4().hex}.tmp"
+        )
+        try:
+            tmp.write_text(json.dumps(data, sort_keys=True))
+            os.replace(tmp, self._watch_status_path)
+        finally:
+            tmp.unlink(missing_ok=True)
+
+    def mark_watching(self, backend: str = "starting") -> None:
+        pid = os.getpid()
+        marker = f"{pid} {_now_iso()} {self._process_identity(pid) or '-'}"
+        self._watch_marker = marker
+        try:
+            self._write_owner_marker(self._watch_pid_path, marker)
+            self._save_watcher_status(
+                {
+                    "running": True,
+                    "pid": pid,
+                    "since": marker.split(maxsplit=2)[1],
+                    "identity": marker.split(maxsplit=2)[2],
+                    "backend": backend,
+                    "pending": False,
+                    "last_success": None,
+                    "last_checkpoint": None,
+                    "last_error": None,
+                }
+            )
         except OSError:
             pass
 
     def clear_watching(self) -> None:
         try:
-            self._watch_pid_path.unlink(missing_ok=True)
+            marker = self._watch_marker
+            if marker is None or self._watch_pid_path.read_text() == marker:
+                self._watch_pid_path.unlink(missing_ok=True)
+                data = self._load_watcher_status()
+                if marker is None or data.get("pid") == os.getpid():
+                    data["running"] = False
+                    data["pending"] = False
+                    self._save_watcher_status(data)
         except OSError:
             pass
+        finally:
+            self._watch_marker = None
+
+    def update_watcher_status(self, **updates: object) -> None:
+        """Persist small watcher diagnostics without replacing another owner."""
+        try:
+            data = self._load_watcher_status()
+            if self._watch_marker is not None and data.get("pid") != os.getpid():
+                return
+            data.update(updates)
+            self._save_watcher_status(data)
+        except OSError:
+            pass
+
+    def note_watcher_backend(self, backend: str) -> None:
+        self.update_watcher_status(backend=backend)
+
+    def note_watcher_pending(self, pending: bool) -> None:
+        self.update_watcher_status(pending=pending)
+
+    def note_watcher_success(self, checkpoint: Checkpoint | None) -> None:
+        self.update_watcher_status(
+            last_success=_now_iso(),
+            last_checkpoint=checkpoint.id if checkpoint is not None else None,
+            last_error=None,
+        )
+
+    def note_watcher_error(self, exc: Exception) -> None:
+        self.update_watcher_status(
+            last_error=f"{type(exc).__name__}: {exc}",
+            last_error_time=_now_iso(),
+        )
+
+    def watcher_diagnostics(self) -> dict:
+        """Return persisted watcher diagnostics, including stopped runs."""
+        return self._load_watcher_status()
 
     def watcher_status(self) -> str | None:
         """A short description of a live watcher process, or None if none."""
         try:
-            raw = self._watch_pid_path.read_text().strip().split(maxsplit=1)
+            marker = self._watch_pid_path.read_text().strip()
+            raw = marker.split(maxsplit=2)
         except OSError:
             return None
         if not raw:
@@ -122,15 +439,35 @@ class Engine:
             pid = int(raw[0])
         except ValueError:
             return None
-        try:
-            os.kill(pid, 0)  # signal 0: liveness probe, does not kill
-        except ProcessLookupError:
-            self.clear_watching()
+        alive = self._process_alive(pid)
+        identity = raw[2] if len(raw) > 2 else "-"
+        current_identity = self._process_identity(pid)
+        if alive is False or (
+            current_identity is not None and identity != "-" and current_identity != identity
+        ):
+            try:
+                if self._watch_pid_path.read_text().strip() == marker:
+                    self._watch_pid_path.unlink(missing_ok=True)
+                    data = self._load_watcher_status()
+                    data["running"] = False
+                    data["pending"] = False
+                    self._save_watcher_status(data)
+            except OSError:
+                pass
             return None
-        except (PermissionError, OSError):
-            pass  # exists but owned by another user; treat as alive
         since = raw[1] if len(raw) > 1 else "?"
-        return f"running (pid {pid}, since {since})"
+        if alive is None:
+            return f"unknown (pid {pid}, since {since}; permission denied or unavailable)"
+        if identity == "-" and current_identity is None:
+            return f"unknown (pid {pid}, since {since}; process identity unavailable)"
+        data = self._load_watcher_status()
+        backend = data.get("backend", "unknown")
+        pending = "yes" if data.get("pending") else "no"
+        error = data.get("last_error")
+        suffix = f", backend {backend}, pending {pending}"
+        if error:
+            suffix += f", last error: {error}"
+        return f"running (pid {pid}, since {since}{suffix})"
 
     # -- low-level tree ops -------------------------------------------------
 
@@ -162,6 +499,18 @@ class Engine:
         # spaces, unicode, or a leading dash round-trip exactly.
         out = self.repo.git("ls-tree", "-r", "-z", "--name-only", tree).stdout
         return {p for p in out.split("\0") if p}
+
+    def _tree_entries(self, tree: str) -> dict[str, tuple[str, str, str]]:
+        """Return ``path -> (mode, type, object-id)`` for a tree."""
+        out = self.repo.git("ls-tree", "-r", "-z", tree).stdout
+        entries: dict[str, tuple[str, str, str]] = {}
+        for record in out.split("\0"):
+            if not record:
+                continue
+            meta, path = record.split("\t", 1)
+            mode, kind, oid = meta.split(" ", 2)
+            entries[path] = (mode, kind, oid)
+        return entries
 
     def _changed_paths(self, tree_a: str, tree_b: str) -> set[str]:
         """Paths that differ between two trees (added, modified, or deleted)."""
@@ -210,7 +559,10 @@ class Engine:
         durably records the pre-restore state before calling this).
         """
         idx = self._tmp_index()
-        stage = self.repo.meta_dir / f"restore-{uuid.uuid4().hex}"
+        # Keep the temporary path short and outside the work tree. A long
+        # repository path plus a deep restored filename can exceed Windows'
+        # legacy path limit when staged below the private git directory.
+        stage = Path(tempfile.mkdtemp(prefix="stepback-restore-"))
         try:
             current_tree = self._snapshot_tree()
             if current_tree == target_tree:
@@ -247,8 +599,19 @@ class Engine:
             same_device = self._same_device(stage)
             for rel in to_write:
                 self._promote(stage / rel, self.repo.work_tree / rel, same_device)
+
+            # Verify the same canonical tree that checkpointing uses. This
+            # catches a failed/partial delete, promotion failure, or a concurrent
+            # writer before the caller reports a successful restore.
+            if self._snapshot_tree() != target_tree:
+                raise RestoreError(
+                    "restore incomplete: working tree does not match target",
+                    operation="verify",
+                )
         except GitError as exc:
-            raise RestoreError(f"could not stage restore: {exc}") from exc
+            raise RestoreError(
+                f"could not stage restore: {exc}", operation="stage"
+            ) from exc
         finally:
             idx.unlink(missing_ok=True)
             shutil.rmtree(stage, ignore_errors=True)
@@ -277,7 +640,12 @@ class Engine:
                     shutil.rmtree(dst, ignore_errors=True)
                 shutil.copy2(src, dst, follow_symlinks=False)
         except OSError as exc:
-            raise RestoreError(f"could not restore {dst}: {exc}") from exc
+            relative = self._relative_path(dst)
+            raise RestoreError(
+                f"could not promote {relative}: {exc}",
+                path=relative,
+                operation="promote",
+            ) from exc
 
     def _clear_conflicting_parents(self, dst: Path) -> None:
         parent = dst.parent
@@ -287,14 +655,27 @@ class Engine:
                 return
             parent = parent.parent
 
+    def _relative_path(self, path: Path) -> str:
+        try:
+            return str(path.relative_to(self.repo.work_tree))
+        except ValueError:
+            return str(path)
+
     def _remove_path(self, fpath: Path) -> None:
         try:
             if fpath.is_dir() and not fpath.is_symlink():
-                shutil.rmtree(fpath, ignore_errors=True)
+                shutil.rmtree(fpath)
             else:
                 fpath.unlink(missing_ok=True)
-        except OSError:
-            return
+        except FileNotFoundError:
+            return  # absent/already removed is an acceptable race
+        except OSError as exc:
+            relative = self._relative_path(fpath)
+            raise RestoreError(
+                f"could not remove {relative}: {exc}",
+                path=relative,
+                operation="remove",
+            ) from exc
         # Prune now-empty parent directories, but never above the work tree.
         parent = fpath.parent
         while parent != self.repo.work_tree and parent.is_dir():
@@ -410,6 +791,178 @@ class Engine:
         stat, changed = self._diff_stat(current_tree, target_tree)
         return RestorePlan(target_tree=target_tree, stat=stat, changed=changed)
 
+    def _normalize_restore_paths(self, current_tree: str, target_tree: str,
+                                 paths: list[str] | tuple[str, ...]) -> tuple[str, ...]:
+        """Validate and expand user paths against the two trees.
+
+        A directory name is accepted as a convenient prefix.  Paths outside
+        the work tree, empty paths, and paths absent from both snapshots are
+        rejected before any filesystem mutation occurs.
+        """
+        current = self._ls_paths(current_tree)
+        target = self._ls_paths(target_tree)
+        available = current | target
+        if not paths:
+            raise ValueError("at least one --path is required")
+
+        expanded: set[str] = set()
+        for raw_value in paths:
+            raw = str(raw_value).replace("\\", "/")
+            if not raw or "\x00" in raw:
+                raise ValueError("restore paths must be non-empty and NUL-free")
+            norm = posixpath.normpath(raw)
+            if norm in (".", "") or norm.startswith("/") or norm == ".." or norm.startswith("../"):
+                raise ValueError(f"restore path escapes the work tree: {raw!r}")
+            if ":" in norm.split("/", 1)[0]:
+                raise ValueError(f"restore path must be relative: {raw!r}")
+            matches = {p for p in available if p == norm or p.startswith(norm + "/")}
+            if not matches:
+                raise ValueError(f"path is absent from both snapshots: {raw!r}")
+            expanded.update(matches)
+
+        # A selected path must include every tree entry participating in a
+        # file/directory transition.  Otherwise a partial restore could leave
+        # an unselected file blocking the requested target layout.
+        for selected in expanded:
+            for other in available:
+                if selected != other and (
+                    selected.startswith(other + "/") or other.startswith(selected + "/")
+                ):
+                    if (selected in current) != (selected in target) or (
+                        other in current
+                        and other not in target
+                        or other in target
+                        and other not in current
+                    ):
+                        if other not in expanded:
+                            raise ValueError(
+                                f"path selection crosses an unselected file/directory transition: {other!r}"
+                            )
+        return tuple(sorted(expanded))
+
+    def plan_restore_paths(self, target_tree: str, paths: list[str] | tuple[str, ...]) -> SelectiveRestorePlan:
+        """Preview a selective restore without changing files or adapters."""
+        current_tree = self._snapshot_tree()
+        selected = self._normalize_restore_paths(current_tree, target_tree, paths)
+        changed_all = self._changed_paths(current_tree, target_tree)
+        changed = len(changed_all & set(selected))
+        stat = self.repo.git(
+            "diff", "--stat", current_tree, target_tree, "--", *selected
+        ).stdout.rstrip()
+        return SelectiveRestorePlan(
+            target_tree=target_tree, paths=selected, stat=stat, changed=changed
+        )
+
+    def _record_redo(self, current_tree: str) -> RedoEntry:
+        """Durably save the pre-restore tree so a partial restore remains undoable."""
+        token = uuid.uuid4().hex[:8]
+        current_commit = self._commit_tree(
+            current_tree, None, f"pre-selective-restore @ {_now_iso()}"
+        )
+        redo_ref = f"refs/checkpoints/_redo/{token}"
+        self.repo.git("update-ref", redo_ref, current_commit)
+        redo_meta, redo_dir = self._snapshot_adapters(f"redo-{token}")
+        self.state.redo.append(
+            RedoEntry(
+                tree=current_tree,
+                commit=current_commit,
+                time=_now_iso(),
+                adapters=redo_meta,
+                session_dir=redo_dir,
+                ref=redo_ref,
+            )
+        )
+        self._save()
+        return self.state.redo[-1]
+
+    def _protect_recovery_tree(self, tree: str) -> str:
+        """Keep a pre-operation tree reachable until its journal is cleared."""
+        token = uuid.uuid4().hex[:8]
+        commit = self._commit_tree(tree, None, f"pre-operation recovery @ {_now_iso()}")
+        ref = f"refs/checkpoints/_recovery/{token}"
+        self.repo.git("update-ref", ref, commit)
+        return ref
+
+    def _restore_tree_paths(self, target_tree: str, paths: tuple[str, ...]) -> None:
+        """Restore only ``paths`` from ``target_tree`` and verify the boundary."""
+        idx = self._tmp_index()
+        stage = Path(tempfile.mkdtemp(prefix="stepback-selective-restore-"))
+        current_tree = self._snapshot_tree()
+        current_entries = self._tree_entries(current_tree)
+        target_entries = self._tree_entries(target_tree)
+        selected = set(paths)
+        try:
+            to_write = sorted(selected & set(target_entries))
+            to_delete = sorted((selected & set(current_entries)) - set(target_entries))
+            if to_write:
+                self.repo.git("read-tree", target_tree, index=idx)
+                self.repo.git(
+                    "checkout-index", "-f", f"--prefix={stage}{os.sep}", "--", *to_write, index=idx
+                )
+            for rel in to_delete:
+                self._remove_path(self.repo.work_tree / rel)
+            same_device = self._same_device(stage)
+            for rel in to_write:
+                self._promote(stage / rel, self.repo.work_tree / rel, same_device)
+
+            after_tree = self._snapshot_tree()
+            after_entries = self._tree_entries(after_tree)
+            outside = self._changed_paths(current_tree, after_tree) - selected
+            if outside:
+                raise RestoreError(
+                    "selective restore changed an unselected path",
+                    operation="verify",
+                    path=sorted(outside)[0],
+                )
+            for rel in selected:
+                if after_entries.get(rel) != target_entries.get(rel):
+                    raise RestoreError(
+                        "selective restore did not reach the requested target",
+                        operation="verify",
+                        path=rel,
+                    )
+        except GitError as exc:
+            raise RestoreError(f"could not stage selective restore: {exc}", operation="stage") from exc
+        finally:
+            idx.unlink(missing_ok=True)
+            shutil.rmtree(stage, ignore_errors=True)
+
+    def restore_paths(self, checkpoint: Checkpoint, paths: list[str] | tuple[str, ...]) -> list[str]:
+        """Restore selected files from ``checkpoint`` while leaving others intact.
+
+        The operation is redo-able as one transaction.  Conversation adapters
+        are intentionally not restored: a file-level selection cannot imply a
+        compatible conversation rewind.
+        """
+        self._begin_restore()
+        self.pause()
+        try:
+            with self._transaction():
+                current_tree = self._snapshot_tree()
+                selected = self._normalize_restore_paths(current_tree, checkpoint.tree, paths)
+                journal = self._begin_journal(
+                    "selective-restore",
+                    pre_tree=current_tree,
+                    target_tree=checkpoint.tree,
+                    selected_paths=selected,
+                )
+                try:
+                    redo = self._record_redo(current_tree)
+                    journal.recovery_ref = redo.ref
+                    journal.advance(self.journal_path, "recovery-saved")
+                    journal.advance(self.journal_path, "applying")
+                    self._restore_tree_paths(checkpoint.tree, selected)
+                    journal.advance(self.journal_path, "verified")
+                    self._save()
+                    self._finish_journal(journal)
+                except Exception as exc:
+                    journal.advance(self.journal_path, "failed", error=f"{type(exc).__name__}: {exc}")
+                    raise
+            return []
+        finally:
+            self._end_restore()
+            self.pause()
+
     def rewind(self, checkpoint: Checkpoint) -> list[str]:
         """Restore to ``checkpoint``, pushing current state onto the redo stack.
 
@@ -419,51 +972,91 @@ class Engine:
         recoverable with ``stepback redo``.
         """
         # Tell any running watcher to ignore the events this restore will cause.
+        self._begin_restore()
         self.pause()
-        with self._transaction():
-            # 1. Preserve current state (files + sessions) for redo, durably.
-            token = uuid.uuid4().hex[:8]
-            current_tree = self._snapshot_tree()
-            current_commit = self._commit_tree(
-                current_tree, None, f"pre-rewind @ {_now_iso()}"
-            )
-            # A ref keeps the pre-rewind commit safe from the user's own git gc.
-            redo_ref = f"refs/checkpoints/_redo/{token}"
-            self.repo.git("update-ref", redo_ref, current_commit)
-            redo_meta, redo_dir = self._snapshot_adapters(f"redo-{token}")
-            self.state.redo.append(
-                RedoEntry(
-                    tree=current_tree,
-                    commit=current_commit,
-                    time=_now_iso(),
-                    adapters=redo_meta,
-                    session_dir=redo_dir,
-                    ref=redo_ref,
+        try:
+            with self._transaction():
+                # 1. Preserve current state (files + sessions) for redo, durably.
+                token = uuid.uuid4().hex[:8]
+                current_tree = self._snapshot_tree()
+                current_commit = self._commit_tree(
+                    current_tree, None, f"pre-rewind @ {_now_iso()}"
                 )
-            )
-            self._save()  # redo is durable before we touch the tree
-
-            # 2. Restore files, then conversation state.
-            self._restore_tree(checkpoint.tree)
-            hints = self._restore_adapters(checkpoint.adapters, checkpoint.session_dir)
-            self._save()
-        self.pause()  # cover trailing filesystem events from the restore
-        return hints
+                # A ref keeps the pre-rewind commit safe from the user's own git gc.
+                redo_ref = f"refs/checkpoints/_redo/{token}"
+                self.repo.git("update-ref", redo_ref, current_commit)
+                redo_meta, redo_dir = self._snapshot_adapters(f"redo-{token}")
+                self.state.redo.append(
+                    RedoEntry(
+                        tree=current_tree,
+                        commit=current_commit,
+                        time=_now_iso(),
+                        adapters=redo_meta,
+                        session_dir=redo_dir,
+                        ref=redo_ref,
+                    )
+                )
+                self._save()  # redo is durable before we touch the tree
+                journal = self._begin_journal(
+                    "rewind",
+                    pre_tree=current_tree,
+                    target_tree=checkpoint.tree,
+                )
+                try:
+                    journal.recovery_ref = redo_ref
+                    journal.advance(self.journal_path, "recovery-saved")
+                    journal.advance(self.journal_path, "applying")
+                    self._restore_tree(checkpoint.tree)
+                    hints = self._restore_adapters(checkpoint.adapters, checkpoint.session_dir)
+                    journal.advance(self.journal_path, "verified")
+                    self._save()
+                    self._finish_journal(journal)
+                except Exception as exc:
+                    journal.advance(self.journal_path, "failed", error=f"{type(exc).__name__}: {exc}")
+                    raise
+            return hints
+        finally:
+            self._end_restore()
+            self.pause()  # cover trailing filesystem events from the restore
 
     def redo(self) -> tuple[RedoEntry | None, list[str]]:
         """Reverse the most recent rewind."""
+        self._begin_restore()
         self.pause()
-        with self._transaction():
-            if not self.state.redo:
-                return None, []
-            entry = self.state.redo.pop()
-            self._restore_tree(entry.tree)
-            hints = self._restore_adapters(entry.adapters, entry.session_dir)
-            if entry.ref:
-                self.repo.git("update-ref", "-d", entry.ref, check=False)
-            self._save()
-        self.pause()
-        return entry, hints
+        try:
+            with self._transaction():
+                if not self.state.redo:
+                    return None, []
+                # Keep the entry on the durable stack until the restore succeeds so
+                # a failed redo can be retried, including from a fresh Engine.
+                entry = self.state.redo[-1]
+                current_tree = self._snapshot_tree()
+                recovery_ref = self._protect_recovery_tree(current_tree)
+                journal = self._begin_journal(
+                    "redo",
+                    pre_tree=current_tree,
+                    target_tree=entry.tree,
+                )
+                try:
+                    journal.recovery_ref = recovery_ref
+                    journal.advance(self.journal_path, "recovery-saved")
+                    journal.advance(self.journal_path, "applying")
+                    self._restore_tree(entry.tree)
+                    hints = self._restore_adapters(entry.adapters, entry.session_dir)
+                    journal.advance(self.journal_path, "verified")
+                    self.state.redo.pop()
+                    if entry.ref:
+                        self.repo.git("update-ref", "-d", entry.ref, check=False)
+                    self.repo.git("update-ref", "-d", recovery_ref, check=False)
+                    self._save()
+                    self._finish_journal(journal)
+                except Exception as exc:
+                    journal.advance(self.journal_path, "failed", error=f"{type(exc).__name__}: {exc}")
+                    raise
+            return entry, hints
+        finally:
+            self._end_restore()
+            self.pause()
 
     def _clear_redo_refs(self) -> None:
         for entry in self.state.redo:

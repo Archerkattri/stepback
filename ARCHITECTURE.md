@@ -7,7 +7,7 @@ never destabilize Layer 1.
 
 ```
          +----------------------- CLI (cli.py, Typer) -----------------------+
-         |  run . list . rewind . redo . diff . status                       |
+         | run . list . rewind . redo . recover . diff . status               |
          +---------------+-------------------------------+-------------------+
                          |                               |
                   +------v------+                 +------v----------+
@@ -81,23 +81,36 @@ copy.
 
 **Redo and crash recovery.** `rewind` snapshots the current state, commits it,
 creates a ref for it under `refs/checkpoints/_redo/<token>` (so the user's own
-`git gc` can't prune it), pushes it onto the redo stack, and saves state, all
-*before* the destructive restore. So an interrupted rewind is always recoverable
-with `stepback redo`. `redo` pops the entry, restores it, and deletes its ref. A
-brand-new checkpoint clears the redo stack and its refs (a new timeline branch).
+`git gc` can't prune it), pushes it onto the redo stack, and writes an operation
+journal before the destructive restore. `restore --path` uses the same journal
+and selective pre-state. `redo` protects its current tree with a temporary
+recovery ref while applying the redo. If a process dies mid-operation, a fresh
+process leaves the files alone until the user runs `stepback recover`, which
+restores the journaled pre-operation tree and verifies it. Successful `redo`
+still pops its entry and successful rewind remains reversible. A brand-new
+checkpoint clears the redo stack and its refs (a new timeline branch).
 
 **Concurrency.** Every mutating operation (`checkpoint`, `rewind`, `redo`,
 `start_session`) runs inside `Engine._transaction()`, which takes a cross-process
-advisory lock (`lock.py`, `fcntl.flock` on POSIX, `O_EXCL` lock file with a
-stale-lock timeout elsewhere) and re-reads state from disk under the lock, so a
-running watcher and a manual command in another terminal serialise cleanly and
-neither loses the other's checkpoints.
+advisory lock (`lock.py`, `fcntl.flock` on POSIX and the kernel-owned
+`LockFileEx` primitive on Windows) and re-reads state from disk under the lock,
+so a running watcher and a manual command in another terminal serialise cleanly
+and neither loses the other's checkpoints. The lock target is retained as a
+stable marker; no process decides ownership from clock age or deletes another
+process's lock.
 
 **Watcher pause.** A restore rewrites files, which the watcher would otherwise
 see and checkpoint (clearing the redo stack). Before and after a restore the
-engine writes a short-lived `paused` marker with a deadline; the watcher's
-`on_settle` checks `is_paused()` and skips while it's set. This works across
-processes because both resolve the same metadata directory.
+engine writes a short-lived `paused` marker with a deadline and an owner marker
+for the full restore duration; the watcher's `on_settle` checks `is_paused()` and
+skips while either is set. The owner marker is checked against process-start
+identity on Windows/Linux and is removed safely after a crashed owner is
+observed dead, so a long restore cannot outlive a fixed grace interval.
+
+**`journal.py`: operation recovery.** The journal is a separate atomically
+written record of operation, pre-tree, target-tree, selected paths, recovery
+ref and phase. It is intentionally file-focused; conversation snapshots are
+not presented as transactionally recoverable. See `docs/recovery.md`.
 
 **`store.py`: state.** The checkpoint log and redo stack live in
 `<git_dir>/stepback/state.json`, written atomically (temp + fsync + `os.replace`)
@@ -110,8 +123,8 @@ a newer state file.
 (default 500 ms quiet period) into one checkpoint, ignoring `.git/` and
 `.stepback/`. It degrades native -> polling -> no-live-watch so a constrained host
 (inotify limit reached) never crashes the watched agent; start/end checkpoints
-still happen. A checkpoint callback that raises is swallowed, never propagated
-into the watched agent.
+still happen. A callback failure is contained from the watched agent but is
+retained on the handler and reported by the CLI error callback.
 
 ## Layer 2: conversation rewind (adapters)
 
@@ -133,8 +146,9 @@ formats):
 - `ClaudeCodeAdapter`: transcripts at `~/.claude/projects/<slug>/<uuid>.jsonl`
   (`<slug>` = cwd with non-alphanumerics -> `-`). Captures the most-recently
   modified transcript; resume hint `claude --resume <uuid>`.
-- `CodexAdapter`: most-recent session file under `~/.codex/sessions/`; resume
-  hint `codex resume`.
+- `CodexAdapter`: one recognized session file whose private metadata has an
+  exact work-tree match under `~/.codex/sessions/`; ambiguous or unsupported
+  metadata degrades to file-only rewind. Resume hint `codex resume`.
 
 **Adding an agent:** implement the five methods, add the class to `ALL_ADAPTERS`
 in `adapters/__init__.py`. `detect_adapters()` picks it up automatically. Keep it

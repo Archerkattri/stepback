@@ -14,6 +14,17 @@ class StepbackError(RuntimeError):
 class RestoreError(StepbackError):
     """A rewind or redo could not complete the working-tree restore."""
 
+    def __init__(
+        self,
+        message: str,
+        *,
+        path: str | None = None,
+        operation: str | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.path = path
+        self.operation = operation
+
 
 class BusyError(StepbackError):
     """Another stepback process holds the lock for this repository."""

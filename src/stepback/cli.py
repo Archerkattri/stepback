@@ -3,7 +3,9 @@
     stepback run -- <agent command...>   watch a session, checkpoint each settled edit burst
     stepback list                        list checkpoints, newest first
     stepback rewind [ID]                 preview + restore to a checkpoint (redo-able)
+    stepback restore [ID] --path FILE   restore selected paths only (redo-able)
     stepback redo                        reverse the last rewind
+    stepback recover                     recover an interrupted file restore
     stepback diff <ID>                   show what a checkpoint changed
     stepback status                      show mode, session, watcher, and adapter state
 """
@@ -38,6 +40,7 @@ app = typer.Typer(
         "  stepback list                 see checkpoints\n"
         "  stepback rewind               preview + restore the most recent one\n"
         "  stepback rewind 6 --dry-run   see what rewinding to #6 would change\n"
+        "  stepback restore 6 --path src/app.py --path tests/  restore selected paths\n"
         "  stepback redo                 undo the last rewind"
     ),
     context_settings={"allow_extra_args": True, "ignore_unknown_options": True},
@@ -123,24 +126,34 @@ def run(ctx: typer.Context) -> None:
     _echo(f"stepback: watching {eng.repo.work_tree} [{eng.repo.mode} mode]")
     _echo(f"stepback: session {session} · conversation adapters: {names}")
 
-    eng.checkpoint(label="session start")
+    start = eng.checkpoint(label="session start")
+    eng.note_watcher_success(start)
 
     def on_settle() -> None:
         # A restore (rewind/redo) in another terminal sets a short pause so the
         # events it causes do not checkpoint the restore and clear the redo stack.
         if eng.is_paused():
             return
-        try:
-            cp = eng.checkpoint()
-        except StepbackError:
-            return
+        cp = eng.checkpoint()
+        eng.note_watcher_success(cp)
         if cp is not None:
             _echo(f"stepback: checkpoint #{cp.id} ({cp.summary})")
 
+    def on_watch_error(exc: Exception) -> None:
+        eng.note_watcher_error(exc)
+        _echo(f"stepback: watcher checkpoint failed: {exc}", err=True)
+
     code = 0
-    watcher = DebouncedWatcher(eng.repo.work_tree, on_settle, quiet_seconds=0.5)
+    watcher = DebouncedWatcher(
+        eng.repo.work_tree,
+        on_settle,
+        quiet_seconds=0.5,
+        on_error=on_watch_error,
+        on_pending=eng.note_watcher_pending,
+    )
     eng.mark_watching()
     with watcher:
+        eng.note_watcher_backend(watcher.backend)
         if watcher.backend == "none":
             _echo(
                 "stepback: live file watching unavailable on this host; "
@@ -162,6 +175,8 @@ def run(ctx: typer.Context) -> None:
         final = eng.checkpoint(label="session end")
     except StepbackError:
         final = None
+    if final is not None:
+        eng.note_watcher_success(final)
     if final is not None:
         _echo(f"stepback: checkpoint #{final.id} ({final.summary})")
     _echo("stepback: session ended.  `stepback list` to see checkpoints.")
@@ -252,6 +267,68 @@ def redo() -> None:
 
 
 @app.command()
+def recover() -> None:
+    """Restore the pre-operation tree from an interrupted file restore journal."""
+    try:
+        eng = _engine(with_adapters=True)
+        journal = eng.recover_pending()
+    except StepbackError as exc:
+        _fail(str(exc))
+    if journal is None:
+        _echo("no interrupted file restore recorded.")
+        return
+    _echo(
+        f"recovered {journal.operation} operation {journal.operation_id[:8]} "
+        f"from phase {journal.phase}."
+    )
+
+
+@app.command()
+def restore(
+    checkpoint_id: int = typer.Argument(
+        None, help="Checkpoint id (default: most recent)."
+    ),
+    path: list[str] = typer.Option(
+        [], "--path", "-p", help="Relative file or directory to restore; repeat for more."
+    ),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Skip the confirmation prompt."),
+    dry_run: bool = typer.Option(
+        False, "--dry-run", "-n", help="Show what would change, then stop."
+    ),
+) -> None:
+    """Restore selected paths from a checkpoint without touching other files."""
+    try:
+        eng = _engine(with_adapters=True)
+    except StepbackError as exc:
+        _fail(str(exc))
+    cp = eng.state.latest() if checkpoint_id is None else eng.state.by_id(checkpoint_id)
+    if cp is None:
+        _fail("no such checkpoint." if checkpoint_id is not None else "no checkpoints yet.")
+    try:
+        plan = eng.plan_restore_paths(cp.tree, path)
+    except (StepbackError, ValueError) as exc:
+        _fail(str(exc), EXIT_USAGE if isinstance(exc, ValueError) else EXIT_ERROR)
+    _echo(f"restore selected paths from checkpoint #{cp.id}  ({_relative_time(cp.time)}, {cp.time})")
+    _echo("  paths: " + ", ".join(plan.paths))
+    if plan.is_noop:
+        _echo("selected paths already match this checkpoint — nothing to do.")
+        raise typer.Exit(EXIT_OK)
+    _echo("\nthis will change selected paths:")
+    _echo(plan.stat or f"  {plan.changed} selected file(s) differ")
+    if dry_run:
+        _echo("\ndry run — nothing changed.  Re-run without --dry-run to apply.")
+        raise typer.Exit(EXIT_OK)
+    if not yes and not typer.confirm("\nproceed?", default=False):
+        _echo("aborted.")
+        raise typer.Exit(EXIT_ERROR)
+    try:
+        eng.restore_paths(cp, list(plan.paths))
+    except StepbackError as exc:
+        _fail(str(exc))
+    _echo(f"restored {len(plan.paths)} selected path(s) from checkpoint #{cp.id}.  (`stepback redo` to undo)")
+
+
+@app.command()
 def diff(
     checkpoint_id: int = typer.Argument(..., help="Checkpoint id."),
     working: bool = typer.Option(
@@ -293,12 +370,21 @@ def status() -> None:
     else:
         _echo("last cp    : (none)")
     watcher = eng.watcher_status()
+    diagnostics = eng.watcher_diagnostics()
     _echo(f"watcher    : {watcher or 'not running'}")
+    _echo(f"watch backend: {diagnostics.get('backend', 'none')}")
+    _echo(f"watch pending: {'yes' if diagnostics.get('pending') else 'no'}")
+    last_success = diagnostics.get("last_success") or "(none)"
+    _echo(f"watch last ok: {last_success}")
+    if diagnostics.get("last_error"):
+        _echo(f"watch error : {diagnostics['last_error']}")
     detected = detect_adapters(eng.repo.work_tree)
     if detected:
         _echo("adapters   : " + ", ".join(a.name for a in detected))
+        _echo("conversation: available (best-effort; " + ", ".join(a.name for a in detected) + ")")
     else:
         _echo("adapters   : none (file-only rewind)")
+        _echo("conversation: unavailable (file-only rewind)")
 
 
 def main() -> None:

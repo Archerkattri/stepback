@@ -20,7 +20,14 @@ from pathlib import Path
 
 
 def _slug(path: Path) -> str:
-    return re.sub(r"[^a-zA-Z0-9]", "-", str(path.resolve()))
+    raw = str(path)
+    # Preserve POSIX-looking absolute paths in cross-platform fixtures while
+    # retaining the drive component for real Windows work trees.
+    if raw.startswith(("/", "\\")) and not (len(raw) >= 2 and raw[1] == ":"):
+        source = path.as_posix()
+    else:
+        source = path.resolve().as_posix()
+    return re.sub(r"[^a-zA-Z0-9]", "-", source)
 
 
 class ClaudeCodeAdapter:

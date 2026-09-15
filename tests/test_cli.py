@@ -57,6 +57,9 @@ def test_status_reports_mode_and_no_watcher(workdir: Path):
     assert result.exit_code == 0
     assert "shadow" in result.output
     assert "watcher    : not running" in result.output
+    assert "watch backend:" in result.output
+    assert "watch last ok:" in result.output
+    assert "conversation: unavailable" in result.output
     assert "adapters   :" in result.output
 
 
@@ -93,6 +96,28 @@ def test_rewind_yes_restores(workdir: Path):
     assert "restored to checkpoint" in result.output
     assert (workdir / "a.txt").read_text() == "good\n"
     assert not (workdir / "junk.txt").exists()
+
+
+def test_rewind_failure_is_nonzero_and_actionable(
+    workdir: Path, monkeypatch: pytest.MonkeyPatch
+):
+    (workdir / "a.txt").write_text("good\n")
+    _run_agent("echo good > a.txt")
+    extra = workdir / "extra.txt"
+    extra.write_text("cannot delete\n")
+    original_unlink = Path.unlink
+
+    def deny_target(self: Path, missing_ok: bool = False) -> None:
+        if self == extra:
+            raise PermissionError("injected delete denial")
+        original_unlink(self, missing_ok=missing_ok)
+
+    monkeypatch.setattr(Path, "unlink", deny_target)
+    result = runner.invoke(app, ["rewind", "-y"])
+    assert result.exit_code == 1
+    assert "could not remove extra.txt" in result.output
+    assert "restored to checkpoint" not in result.output
+    assert extra.exists()
 
 
 def test_rewind_then_redo(workdir: Path):

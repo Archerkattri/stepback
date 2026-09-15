@@ -322,7 +322,7 @@ def test_file_lock_times_out(tmp_path: Path):
 
 
 def test_file_lock_fallback_without_fcntl(tmp_path: Path, monkeypatch):
-    """Exercise the O_EXCL fallback used on platforms without fcntl."""
+    """Exercise the Windows kernel-lock path when fcntl is unavailable."""
     import stepback.lock as lockmod
 
     monkeypatch.setattr(lockmod, "fcntl", None)
@@ -332,7 +332,128 @@ def test_file_lock_fallback_without_fcntl(tmp_path: Path, monkeypatch):
         with pytest.raises(LockTimeout):
             with file_lock(lock, timeout=0.2, poll=0.02):
                 pass
-    assert not lock.exists()  # released on exit
+    # The handle is released; the marker file is retained as a stable lock
+    # target, so no timestamp-based cleanup can race a live owner.
+    assert lock.exists()
+
+
+def test_old_lock_file_age_never_breaks_live_holder(tmp_path: Path, monkeypatch):
+    """An old-looking lock remains owned until its OS/file handle releases it."""
+    import stepback.lock as lockmod
+
+    monkeypatch.setattr(lockmod, "fcntl", None)
+    lock = tmp_path / "old.lock"
+    with file_lock(lock, timeout=5):
+        old = time.time() - 3600
+        os.utime(lock, (old, old))
+        with pytest.raises(LockTimeout):
+            with file_lock(lock, timeout=0.15, poll=0.02):
+                pass
+
+
+def test_lock_is_released_by_killed_holder(tmp_path: Path):
+    """The kernel releases a child-held lock without stale-file deletion."""
+    lock = tmp_path / "child.lock"
+    ready = tmp_path / "ready"
+    source_root = Path(__file__).resolve().parents[1] / "src"
+    script = (
+        "import sys,time; from pathlib import Path; "
+        "from stepback.lock import file_lock; "
+        "lock=Path(sys.argv[1]); ready=Path(sys.argv[2]); "
+        "\nwith file_lock(lock, timeout=5): ready.write_text('ready'); time.sleep(30)"
+    )
+    env = os.environ.copy()
+    env["PYTHONPATH"] = str(source_root)
+    child = subprocess.Popen(
+        [sys.executable, "-c", script, str(lock), str(ready)],
+        env=env,
+    )
+    try:
+        deadline = time.monotonic() + 5
+        while not ready.exists() and time.monotonic() < deadline:
+            time.sleep(0.02)
+        assert ready.exists()
+        child.terminate()
+        child.wait(timeout=5)
+        with file_lock(lock, timeout=2):
+            assert lock.exists()
+    finally:
+        if child.poll() is None:
+            child.kill()
+            child.wait(timeout=5)
+
+
+def test_watcher_status_does_not_signal_or_kill_child(tmp_path: Path):
+    """Status uses a read-only query and leaves a fixture-owned child alive."""
+    child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(5)"])
+    try:
+        eng = Engine(tmp_path)
+        identity = eng._process_identity(child.pid) or "-"
+        eng._watch_pid_path.parent.mkdir(parents=True, exist_ok=True)
+        eng._watch_pid_path.write_text(f"{child.pid} test {identity}")
+        status = eng.watcher_status()
+        assert status is not None and "running" in status
+        assert child.poll() is None
+    finally:
+        child.terminate()
+        child.wait(timeout=5)
+
+
+def test_watcher_status_rejects_pid_reuse_marker(tmp_path: Path):
+    eng = Engine(tmp_path)
+    eng._watch_pid_path.write_text(
+        f"{os.getpid()} test definitely-not-this-process-start"
+    )
+    assert eng.watcher_status() is None
+    assert not eng._watch_pid_path.exists()
+
+
+def test_restore_pause_covers_a_long_restore(tmp_path: Path, monkeypatch):
+    (tmp_path / "f.txt").write_text("v1\n")
+    eng = Engine(tmp_path)
+    checkpoint = eng.checkpoint()
+    assert checkpoint is not None
+    (tmp_path / "f.txt").write_text("v2\n")
+
+    entered = threading.Event()
+    release = threading.Event()
+    original_restore = eng._restore_tree
+
+    def slow_restore(tree: str) -> None:
+        entered.set()
+        assert release.wait(5)
+        original_restore(tree)
+
+    monkeypatch.setattr(eng, "_restore_tree", slow_restore)
+    result: list[object] = []
+
+    def rewind() -> None:
+        result.extend(eng.rewind(checkpoint))
+
+    thread = threading.Thread(target=rewind)
+    thread.start()
+    assert entered.wait(5)
+    time.sleep(3.2)  # longer than the old fixed pause interval
+    assert Engine(tmp_path).is_paused() is True
+    release.set()
+    thread.join(timeout=5)
+    assert not thread.is_alive()
+
+
+def test_watcher_diagnostics_round_trip(tmp_path: Path):
+    eng = Engine(tmp_path)
+    eng.mark_watching("polling")
+    eng.note_watcher_pending(True)
+    eng.note_watcher_error(RuntimeError("disk full"))
+    eng.note_watcher_pending(False)
+    data = eng.watcher_diagnostics()
+    assert data["running"] is True
+    assert data["backend"] == "polling"
+    assert data["pending"] is False
+    assert "disk full" in data["last_error"]
+    eng.clear_watching()
+    stopped = Engine(tmp_path).watcher_diagnostics()
+    assert stopped["running"] is False
 
 
 def test_concurrent_checkpoints_are_serialized(tmp_path: Path):
@@ -393,3 +514,57 @@ def test_restore_error_is_typed(tmp_path: Path):
     with pytest.raises(RestoreError):
         eng._restore_tree("0" * 40)
     assert (tmp_path / "f.txt").read_text() == "v1\n"
+
+
+def test_required_extra_file_delete_failure_is_typed_and_recoverable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    (tmp_path / "good.txt").write_text("good\n")
+    eng = Engine(tmp_path)
+    checkpoint = eng.checkpoint()
+    assert checkpoint is not None
+    extra = tmp_path / "extra.txt"
+    extra.write_text("must not disappear\n")
+    original_unlink = Path.unlink
+
+    def deny_target(self: Path, missing_ok: bool = False) -> None:
+        if self == extra:
+            raise PermissionError("injected delete denial")
+        original_unlink(self, missing_ok=missing_ok)
+
+    monkeypatch.setattr(Path, "unlink", deny_target)
+    with pytest.raises(RestoreError, match="extra.txt") as failure:
+        eng.rewind(checkpoint)
+    assert failure.value.path == "extra.txt"
+    assert failure.value.operation == "remove"
+    assert extra.exists()
+    # The pre-rewind state was saved before the failing restore and is available
+    # after reloading a new Engine instance.
+    reloaded = Engine(tmp_path)
+    assert len(reloaded.state.redo) == 1
+
+
+def test_failed_redo_keeps_entry_for_retry(tmp_path: Path):
+    (tmp_path / "f.txt").write_text("v1\n")
+    eng = Engine(tmp_path)
+    checkpoint = eng.checkpoint()
+    assert checkpoint is not None
+    (tmp_path / "f.txt").write_text("v2\n")
+    eng.rewind(checkpoint)
+    assert len(eng.state.redo) == 1
+    original_promote = eng._promote
+
+    def fail_promote(*args, **kwargs):
+        raise RestoreError("injected promote failure", operation="promote")
+
+    eng._promote = fail_promote
+    with pytest.raises(RestoreError, match="promote"):
+        eng.redo()
+    assert len(eng.state.redo) == 1
+    assert len(Engine(tmp_path).state.redo) == 1
+
+    eng._promote = original_promote
+    entry, _ = eng.redo()
+    assert entry is not None
+    assert len(eng.state.redo) == 0
+    assert (tmp_path / "f.txt").read_text() == "v2\n"

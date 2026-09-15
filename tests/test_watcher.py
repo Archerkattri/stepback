@@ -67,6 +67,20 @@ def test_callback_exception_never_propagates():
     h.flush()  # also swallowed
 
 
+def test_callback_exception_is_recorded_and_reported():
+    errors: list[Exception] = []
+
+    def boom():
+        raise RuntimeError("checkpoint failed")
+
+    h = _DebounceHandler(boom, 0.02, on_error=errors.append)
+    h.on_any_event(_file_event("/work/a.txt"))
+    time.sleep(0.1)
+    assert errors and "checkpoint failed" in str(errors[0])
+    assert h.last_error is not None
+    assert "RuntimeError" in h.last_error
+
+
 def test_watcher_starts_and_stops(tmp_path: Path):
     fired = {"n": 0}
     w = DebouncedWatcher(tmp_path, lambda: fired.__setitem__("n", fired["n"] + 1), 0.1)
@@ -75,3 +89,14 @@ def test_watcher_starts_and_stops(tmp_path: Path):
         assert w.backend in {"native", "polling", "none"}
     # stop() is clean and idempotent
     w.stop()
+
+
+def test_watcher_exposes_callback_error(tmp_path: Path):
+    def boom():
+        raise ValueError("bad")
+
+    w = DebouncedWatcher(tmp_path, boom, 0.02)
+    w._handler.on_any_event(_file_event(str(tmp_path / "a.txt")))
+    time.sleep(0.1)
+    assert w.last_error is not None
+    assert "ValueError" in w.last_error
