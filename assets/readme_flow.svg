@@ -1,31 +1,25 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 198" role="img" aria-labelledby="title desc">
-  <title id="title">stepback architecture</title>
-  <desc id="desc">Agent-safe file time travel</desc>
-  <rect width="900" height="198" rx="18" fill="#020617"/>
-  <text x="28" y="36" fill="#f8fafc" font-family="Inter,Segoe UI,sans-serif" font-size="22" font-weight="700">stepback</text>
-  <text x="28" y="62" fill="#94a3b8" font-family="Inter,Segoe UI,sans-serif" font-size="13">Agent-safe file time travel</text>
-  <path d="M212 131h22m-8-6 8 6-8 6" fill="none" stroke="#64748b" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-  <path d="M432 131h22m-8-6 8 6-8 6" fill="none" stroke="#64748b" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-  <path d="M652 131h22m-8-6 8 6-8 6" fill="none" stroke="#64748b" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-  <g transform="translate(28 94)">
-    <rect width="184" height="74" rx="12" fill="#111827" stroke="#facc15" stroke-width="1.5"/>
-    <text x="92" y="31" text-anchor="middle" fill="#f8fafc" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="12" font-weight="700">AGENT EDIT</text>
-    <text x="92" y="53" text-anchor="middle" fill="#94a3b8" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="10">STAGE 1</text>
-  </g>
-  <g transform="translate(248 94)">
-    <rect width="184" height="74" rx="12" fill="#111827" stroke="#facc15" stroke-width="1.5"/>
-    <text x="92" y="31" text-anchor="middle" fill="#f8fafc" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="12" font-weight="700">CHECKPOINT</text>
-    <text x="92" y="53" text-anchor="middle" fill="#94a3b8" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="10">STAGE 2</text>
-  </g>
-  <g transform="translate(468 94)">
-    <rect width="184" height="74" rx="12" fill="#111827" stroke="#facc15" stroke-width="1.5"/>
-    <text x="92" y="31" text-anchor="middle" fill="#f8fafc" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="12" font-weight="700">SELECT REVISION</text>
-    <text x="92" y="53" text-anchor="middle" fill="#94a3b8" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="10">STAGE 3</text>
-  </g>
-  <g transform="translate(688 94)">
-    <rect width="184" height="74" rx="12" fill="#111827" stroke="#facc15" stroke-width="1.5"/>
-    <text x="92" y="31" text-anchor="middle" fill="#f8fafc" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="12" font-weight="700">REWIND FILES</text>
-    <text x="92" y="53" text-anchor="middle" fill="#94a3b8" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="10">STAGE 4</text>
-  </g>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 470" role="img" aria-labelledby="title desc">
+  <title id="title">StepBack restore and recovery transaction</title>
+  <desc id="desc">Previewed inputs, write-ahead journal, staged replacement, and fresh-process recovery protect unrelated work.</desc>
+  <rect width="1200" height="470" rx="22" fill="#020617"/>
+  <defs>
+    <marker id="arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0 0L8 4L0 8Z" fill="#64748b"/></marker>
+    <style>.t{font-family:Inter,Segoe UI,sans-serif;fill:#f8fafc}.m{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;fill:#cbd5e1}.muted{fill:#94a3b8}.line{fill:none;stroke:#64748b;stroke-width:2;marker-end:url(#arrow)}.dash{fill:none;stroke:#475569;stroke-width:1.5;stroke-dasharray:6 5}.box{fill:#111827;stroke:#334155;stroke-width:1.5}</style>
+  </defs>
+  <text class="t" x="38" y="46" font-size="25" font-weight="700">StepBack restore and recovery transaction</text>
+  <text class="t muted" x="38" y="72" font-size="14">Previewed inputs, write-ahead journal, staged replacement, and fresh-process recovery protect unrelated work.</text>
+  <g transform="translate(25 160)"><rect class="box" width="145" height="74" rx="12" stroke="#facc15"/><text class="t" x="72.5" y="32" text-anchor="middle" font-size="14" font-weight="700">Agent edits</text><text class="m muted" x="72.5" y="55" text-anchor="middle" font-size="11">settled burst</text></g>
+  <path class="line" d="M170 197L215 197"/>
+  <g transform="translate(215 145)"><rect class="box" width="170" height="104" rx="12" stroke="#facc15"/><text class="t" x="85" y="47" text-anchor="middle" font-size="14" font-weight="700">Checkpoint</text><text class="m muted" x="85" y="70" text-anchor="middle" font-size="11">content-addressed</text></g>
+  <path class="line" d="M385 197L435 197"/>
+  <g transform="translate(435 145)"><rect class="box" width="170" height="104" rx="12" stroke="#38bdf8"/><text class="t" x="85" y="47" text-anchor="middle" font-size="14" font-weight="700">Restore preview</text><text class="m muted" x="85" y="70" text-anchor="middle" font-size="11">selected paths + hashes</text></g>
+  <path class="line" d="M605 197L655 197"/>
+  <g transform="translate(655 145)"><rect class="box" width="170" height="104" rx="12" stroke="#f59e0b"/><text class="t" x="85" y="47" text-anchor="middle" font-size="14" font-weight="700">Write-ahead journal</text><text class="m muted" x="85" y="70" text-anchor="middle" font-size="11">pre-operation snapshot</text></g>
+  <path class="line" d="M825 197L875 197"/>
+  <path d="M945 130L1020 197L945 264L875 197Z" fill="#172033" stroke="#facc15" stroke-width="1.5"/><text class="t" x="945" y="189" text-anchor="middle" font-size="13" font-weight="700">postcondition?</text><text class="m muted" x="945" y="211" text-anchor="middle" font-size="10">hash + path checks</text>
+  <path class="line" d="M1020 175L1160 120"/>
+  <path class="line" d="M1020 220L1160 285"/>
+  <text class="m" x="1168" y="116" text-anchor="end" font-size="11" fill="#22c55e">commit + redo link</text><text class="m" x="1168" y="309" text-anchor="end" font-size="11" fill="#f59e0b">resume / recover</text>
+  <path class="dash" d="M945 264V335H300V249"/><text class="m" x="620" y="364" text-anchor="middle" font-size="12">fresh process reads journal and restores or resumes without changing HEAD or index</text>
+  <rect x="25" y="395" width="1143" height="38" rx="9" fill="#0f172a" stroke="#334155"/><text class="m" x="597" y="419" text-anchor="middle" font-size="11">protected: unselected files · staged changes · branch/HEAD · ignored-policy exclusions · recovery roots</text>
 </svg>
-

@@ -39,12 +39,13 @@ $ stepback rewind 6                 # preview the diff, confirm, done
 $ stepback restore 6 --path src/     # restore only one subtree; leave other edits intact
 ```
 
+## Restore and recovery path
+
+![StepBack restore and recovery path](assets/readme_flow.svg)
+
+Every restore is previewed from content hashes, journalled before mutation, and either completed, resumed, or rolled back while preserving HEAD, the index, and unselected files.
+
 ## Why this exists (and how it's different)
-## Architecture at a glance
-
-![stepback-current architecture](assets/readme_flow.svg)
-
-StepBack observes settled edit bursts, records the file state, and rewinds only the working tree when the selected checkpoint is restored.
 
 A handful of "undo my AI agent" tools already exist (walkback, doover, bashback,
 and others). They share two limits that `stepback` is built to beat:
