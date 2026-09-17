@@ -325,7 +325,9 @@ class Engine:
         except (OSError, ValueError):
             pass
         try:
-            raw = self.restore_path.read_text().strip().split()
+            # Identities may contain spaces (macOS `ps` start time), so only
+            # the PID is split off; the remainder is the opaque identity.
+            raw = self.restore_path.read_text().strip().split(maxsplit=1)
             if len(raw) < 2:
                 return False
             pid, identity = int(raw[0]), raw[1]

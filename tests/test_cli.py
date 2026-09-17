@@ -7,6 +7,8 @@ touched.
 
 from __future__ import annotations
 
+import os
+import sys
 from pathlib import Path
 
 import pytest
@@ -15,6 +17,30 @@ from typer.testing import CliRunner
 from stepback.cli import app
 
 runner = CliRunner()
+
+
+def _bash_cmd() -> list[str] | None:
+    """Locate a real bash for the agent snippets.
+
+    Off Windows this is plain ``bash``.  On Windows a bare ``bash`` resolves
+    to the WSL stub in System32 (which fails without an installed distro and
+    sorts before any appended PATH entry), so only an explicit Git Bash is
+    accepted.  Returns None on Windows without Git for Windows.
+    """
+    if sys.platform != "win32":
+        return ["bash"]
+    override = os.environ.get("STEPBACK_TEST_BASH", "")
+    for candidate in (
+        override,
+        r"C:\Program Files\Git\bin\bash.exe",
+        r"C:\Program Files\Git\usr\bin\bash.exe",
+    ):
+        if candidate and Path(candidate).is_file():
+            return [candidate]
+    return None
+
+
+_BASH = _bash_cmd()
 
 
 @pytest.fixture()
@@ -31,7 +57,9 @@ def workdir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 
 def _run_agent(script: str) -> None:
     """Drive a checkpoint by running a bash snippet under `stepback run`."""
-    result = runner.invoke(app, ["run", "--", "bash", "-c", script])
+    if _BASH is None:
+        pytest.skip("Git Bash not available on this Windows host")
+    result = runner.invoke(app, ["run", "--", *_BASH, "-c", script])
     assert result.exit_code == 0, result.output
 
 
