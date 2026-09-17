@@ -1,0 +1,76 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="520" viewBox="0 0 1200 520" role="img" aria-labelledby="title desc">
+  <title id="title">stepback — rewind any AI coding agent</title>
+  <desc id="desc">A terminal demonstration of StepBack checkpointing an AI coding session and rewinding it safely.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#090b10"/>
+      <stop offset="1" stop-color="#111827"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#65e6c4"/>
+      <stop offset="1" stop-color="#6ea8fe"/>
+    </linearGradient>
+    <filter id="glow" x="-40%" y="-40%" width="180%" height="180%">
+      <feGaussianBlur stdDeviation="10"/>
+    </filter>
+    <pattern id="grid" width="32" height="32" patternUnits="userSpaceOnUse">
+      <path d="M32 0H0V32" fill="none" stroke="#1f2937" stroke-width="1"/>
+    </pattern>
+  </defs>
+
+  <rect width="1200" height="520" rx="26" fill="url(#bg)"/>
+  <rect width="1200" height="520" rx="26" fill="url(#grid)" opacity=".42"/>
+  <circle cx="1040" cy="70" r="150" fill="#65e6c4" opacity=".08" filter="url(#glow)"/>
+  <circle cx="190" cy="465" r="170" fill="#6ea8fe" opacity=".08" filter="url(#glow)"/>
+  <rect x=".5" y=".5" width="1199" height="519" rx="25.5" fill="none" stroke="#2a3443"/>
+
+  <g font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">
+    <text x="64" y="88" font-size="56" font-weight="800" fill="url(#accent)">stepback</text>
+    <text x="66" y="126" font-size="20" fill="#d5dbea">rewind any AI coding agent</text>
+    <text x="66" y="157" font-size="14" fill="#8491a6">checkpoint every edit · restore exactly · never touch HEAD or your index</text>
+
+    <g transform="translate(64 196)">
+      <rect width="1072" height="260" rx="15" fill="#0b0e14" stroke="#303a49"/>
+      <path d="M0 45H1072" stroke="#303a49"/>
+      <circle cx="25" cy="23" r="6" fill="#ff6b6b"/>
+      <circle cx="45" cy="23" r="6" fill="#f5c451"/>
+      <circle cx="65" cy="23" r="6" fill="#65e6c4"/>
+      <text x="536" y="28" text-anchor="middle" font-size="12" fill="#6f7d91">agent-session — zsh</text>
+
+      <text x="28" y="82" font-size="15" fill="#65e6c4">$</text>
+      <text x="48" y="82" font-size="15" fill="#e8edf7">stepback run -- codex</text>
+      <text x="28" y="112" font-size="13" fill="#8491a6">stepback: watching project · checkpoints isolated in private shadow-refs</text>
+
+      <g transform="translate(28 137)">
+        <rect width="474" height="88" rx="9" fill="#111722" stroke="#263246"/>
+        <text x="18" y="26" font-size="13" fill="#8491a6">#8   just now</text>
+        <text x="156" y="26" font-size="13" fill="#e8edf7">3 files</text>
+        <text x="414" y="26" font-size="12" fill="#65e6c4">saved</text>
+        <text x="18" y="52" font-size="13" fill="#8491a6">#7   2m ago</text>
+        <text x="156" y="52" font-size="13" fill="#e8edf7">1 file</text>
+        <text x="414" y="52" font-size="12" fill="#65e6c4">saved</text>
+        <text x="18" y="76" font-size="13" fill="#8491a6">#6   5m ago</text>
+        <text x="156" y="76" font-size="13" fill="#e8edf7">clean state</text>
+        <text x="372" y="76" font-size="12" fill="#6ea8fe">+ conversation</text>
+      </g>
+
+      <path d="M528 181H578" stroke="#6ea8fe" stroke-width="2"/>
+      <path d="m570 174 8 7-8 7" fill="none" stroke="#6ea8fe" stroke-width="2"/>
+
+      <g transform="translate(602 137)">
+        <rect width="442" height="88" rx="9" fill="#111722" stroke="#263246"/>
+        <text x="18" y="27" font-size="14" fill="#65e6c4">$</text>
+        <text x="38" y="27" font-size="14" fill="#e8edf7">stepback rewind 6</text>
+        <text x="18" y="54" font-size="13" fill="#65e6c4">✓ restored exactly</text>
+        <text x="171" y="54" font-size="13" fill="#8491a6">· redo available</text>
+        <text x="18" y="76" font-size="12" fill="#6ea8fe">resume conversation: codex resume</text>
+      </g>
+    </g>
+
+    <g transform="translate(64 486)">
+      <rect width="190" height="25" rx="12.5" fill="#65e6c4" opacity=".13"/>
+      <text x="95" y="17" text-anchor="middle" font-size="12" fill="#65e6c4">pip install stepback</text>
+      <text x="216" y="17" font-size="12" fill="#8491a6">MIT · Python 3.11+ · Claude Code · Codex · aider · any CLI agent</text>
+    </g>
+  </g>
+</svg>
