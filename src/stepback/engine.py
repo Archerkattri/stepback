@@ -12,6 +12,7 @@ import json
 import os
 import posixpath
 import shutil
+import subprocess
 import sys
 import tempfile
 import time
@@ -213,9 +214,23 @@ class Engine:
             except (OSError, AttributeError):
                 return None
 
-        # Linux exposes a monotonic process start tick in /proc.  macOS does
-        # not provide an equally portable stdlib query, so liveness there is
-        # reported conservatively when no identity is available.
+        # macOS has no /proc: use the read-only `ps` start time as the
+        # identity.  Like the Linux tick below, it is only ever compared
+        # for equality, so its exact format does not matter.
+        if sys.platform == "darwin":
+            try:
+                proc = subprocess.run(
+                    ["ps", "-o", "lstart=", "-p", str(pid)],
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                )
+                start = proc.stdout.strip()
+                return start or None
+            except (OSError, subprocess.SubprocessError):
+                return None
+
+        # Linux exposes a monotonic process start tick in /proc.
         try:
             stat = Path(f"/proc/{pid}/stat").read_text()
             rest = stat[stat.rfind(")") + 2 :].split()
