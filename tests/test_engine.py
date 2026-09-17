@@ -129,8 +129,6 @@ def test_interrupted_selective_restore_is_recoverable_from_fresh_engine(tmp_path
     (tmp_path / "a.txt").write_text("a2\n")
     (tmp_path / "b.txt").write_text("b2\n")
 
-    original = eng._restore_tree_paths
-
     def fail_after_partial(target_tree, paths):
         (tmp_path / "a.txt").write_text("partial\n")
         raise RuntimeError("injected interruption")

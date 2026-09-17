@@ -12,6 +12,7 @@ import json
 import os
 import posixpath
 import shutil
+import sys
 import tempfile
 import time
 import uuid
@@ -165,7 +166,7 @@ class Engine:
 
     def _process_identity(self, pid: int) -> str | None:
         """Return a process-start identity where the platform exposes one."""
-        if os.name == "nt":
+        if sys.platform == "win32":
             # QueryLimitedInformation/GetProcessTimes are read-only and do not
             # send a signal.  The creation time also lets status reject PID
             # reuse instead of mistaking a new process for our watcher.
@@ -224,7 +225,7 @@ class Engine:
 
     def _process_alive(self, pid: int) -> bool | None:
         """Read process liveness without sending a signal on Windows."""
-        if os.name == "nt":
+        if sys.platform == "win32":
             try:
                 import ctypes
                 from ctypes import wintypes
@@ -825,19 +826,22 @@ class Engine:
         # an unselected file blocking the requested target layout.
         for selected in expanded:
             for other in available:
-                if selected != other and (
-                    selected.startswith(other + "/") or other.startswith(selected + "/")
+                if (
+                    selected != other
+                    and (
+                        selected.startswith(other + "/")
+                        or other.startswith(selected + "/")
+                    )
+                    and (
+                        (selected in current) != (selected in target)
+                        or (other in current and other not in target)
+                        or (other in target and other not in current)
+                    )
+                    and other not in expanded
                 ):
-                    if (selected in current) != (selected in target) or (
-                        other in current
-                        and other not in target
-                        or other in target
-                        and other not in current
-                    ):
-                        if other not in expanded:
-                            raise ValueError(
-                                f"path selection crosses an unselected file/directory transition: {other!r}"
-                            )
+                    raise ValueError(
+                        f"path selection crosses an unselected file/directory transition: {other!r}"
+                    )
         return tuple(sorted(expanded))
 
     def plan_restore_paths(self, target_tree: str, paths: list[str] | tuple[str, ...]) -> SelectiveRestorePlan:

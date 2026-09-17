@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import errno
 import os
+import sys
 import time
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -29,7 +30,8 @@ except ImportError:  # pragma: no cover - Windows
 
 _Overlapped: Any
 
-if os.name == "nt":  # pragma: no cover - exercised by Windows CI
+# sys.platform (not os.name) so type checkers prune the foreign branch per target.
+if sys.platform == "win32":  # pragma: no cover - exercised by Windows CI
     import msvcrt
     from ctypes import POINTER, Structure, WinDLL, byref, c_size_t, get_last_error, wintypes
 
@@ -67,6 +69,17 @@ if os.name == "nt":  # pragma: no cover - exercised by Windows CI
     _LOCKFILE_FAIL_IMMEDIATELY = 0x00000001
     _Overlapped = _WindowsOverlapped
 else:
+    # Non-Windows scaffold: these names exist only under the pruned win32
+    # branch above, so bind them as Any for the type checker on other targets.
+    msvcrt: Any = None
+    wintypes: Any = None
+    byref: Any = None
+    get_last_error: Any = None
+    _lock_file_ex: Any = None
+    _unlock_file_ex: Any = None
+    _ERROR_LOCK_VIOLATION: Any = 0
+    _LOCKFILE_EXCLUSIVE_LOCK: Any = 0
+    _LOCKFILE_FAIL_IMMEDIATELY: Any = 0
     _Overlapped = None
 
 
@@ -121,14 +134,14 @@ def file_lock(
     """
     path.parent.mkdir(parents=True, exist_ok=True)
 
-    if fcntl is not None:
+    if sys.platform != "win32" and fcntl is not None:
         fd = os.open(str(path), os.O_CREAT | os.O_RDWR, 0o644)
         try:
             deadline = time.monotonic() + timeout
             while True:
                 try:
-                    fcntl.flock(  # type: ignore[attr-defined]
-                        fd, fcntl.LOCK_EX | fcntl.LOCK_NB  # type: ignore[attr-defined]
+                    fcntl.flock(
+                        fd, fcntl.LOCK_EX | fcntl.LOCK_NB
                     )
                     break
                 except OSError:
@@ -140,12 +153,12 @@ def file_lock(
             yield
         finally:
             try:
-                fcntl.flock(fd, fcntl.LOCK_UN)  # type: ignore[attr-defined]
+                fcntl.flock(fd, fcntl.LOCK_UN)
             finally:
                 os.close(fd)
         return
 
-    if os.name == "nt":
+    if sys.platform == "win32":
         # Windows has no fcntl module; use the kernel primitive instead of a
         # timestamped O_EXCL lease.  The handle must remain open for ownership.
         fd = os.open(str(path), os.O_CREAT | os.O_RDWR, 0o644)

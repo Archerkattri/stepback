@@ -37,7 +37,7 @@ class OperationJournal:
         pre_tree: str,
         target_tree: str,
         selected_paths: tuple[str, ...] = (),
-    ) -> "OperationJournal":
+    ) -> OperationJournal:
         return cls(
             operation_id=uuid.uuid4().hex,
             operation=operation,
@@ -49,7 +49,7 @@ class OperationJournal:
         )
 
     @classmethod
-    def load(cls, path: Path) -> "OperationJournal | None":
+    def load(cls, path: Path) -> OperationJournal | None:
         try:
             raw = json.loads(path.read_text(encoding="utf-8"))
             if not isinstance(raw, dict):

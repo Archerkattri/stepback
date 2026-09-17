@@ -321,8 +321,9 @@ def test_file_lock_times_out(tmp_path: Path):
                 pass
 
 
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows kernel-lock path needs LockFileEx")
 def test_file_lock_fallback_without_fcntl(tmp_path: Path, monkeypatch):
-    """Exercise the Windows kernel-lock path when fcntl is unavailable."""
+    """Exercise the Windows kernel-lock path when fcntl is unavailable (Windows-only)."""
     import stepback.lock as lockmod
 
     monkeypatch.setattr(lockmod, "fcntl", None)
@@ -335,6 +336,25 @@ def test_file_lock_fallback_without_fcntl(tmp_path: Path, monkeypatch):
     # The handle is released; the marker file is retained as a stable lock
     # target, so no timestamp-based cleanup can race a live owner.
     assert lock.exists()
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX O_EXCL fallback path")
+def test_file_lock_oexcl_fallback_without_fcntl_posix(tmp_path: Path, monkeypatch):
+    """Pin the last-resort O_EXCL contract when fcntl is unavailable off Windows."""
+    import stepback.lock as lockmod
+
+    monkeypatch.setattr(lockmod, "fcntl", None)
+    lock = tmp_path / "l.lock"
+    with file_lock(lock, timeout=5):
+        assert lock.exists()  # existence *is* the lock here
+        with pytest.raises(LockTimeout):
+            with file_lock(lock, timeout=0.2, poll=0.02):
+                pass
+    # The marker must be removed on release: with no stale-age deletion, a
+    # retained file would deadlock every future acquirer.
+    assert not lock.exists()
+    with file_lock(lock, timeout=5):
+        assert lock.exists()
 
 
 def test_old_lock_file_age_never_breaks_live_holder(tmp_path: Path, monkeypatch):

@@ -7,6 +7,7 @@
   <a href="https://pypi.org/project/stepback/"><img src="https://img.shields.io/pypi/pyversions/stepback?style=flat-square" alt="Python"></a>
   <a href="https://pypi.org/project/stepback/"><img src="https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fraw.githubusercontent.com%2FArcherkattri%2FArcherkattri%2Fmaster%2Fassets%2Fstats.json&query=%24.pypi_projects.stepback&label=lifetime%20downloads&style=flat-square&color=2f9e44" alt="Lifetime downloads"></a>
   <a href="https://github.com/Archerkattri/stepback/actions/workflows/ci.yml"><img src="https://github.com/Archerkattri/stepback/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="tests/"><img src="https://img.shields.io/badge/tests-86%20passing-16a34a?style=flat-square" alt="Tests"></a>
   <a href="LICENSE"><img src="https://img.shields.io/pypi/l/stepback?style=flat-square" alt="MIT license"></a>
   <a href="https://doi.org/10.5281/zenodo.21536384"><img src="https://zenodo.org/badge/DOI/10.5281/zenodo.21536384.svg" alt="DOI"></a>
 </p>
@@ -213,6 +214,6 @@ MIT (c) 2026 Krishi Attri
 
 The current release includes selective file/subtree restore, write-ahead
 journalling, fresh-process recovery, untouched-path verification, atomic
-promotion and durable redo. The full suite passes 85 tests with 1 existing
-Windows symlink skip; conversation-layer rewind remains adapter/platform
-dependent.
+promotion and durable redo. The suite passes 86 tests with 1 platform-gated
+skip on Linux (85 passed, 2 skipped on Windows); ruff and mypy are clean on
+both targets. Conversation-layer rewind remains adapter/platform dependent.
