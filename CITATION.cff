@@ -5,8 +5,8 @@ type: software
 authors:
   - family-names: Attri
     given-names: Krishi
-version: 0.1.2
-date-released: 2026-07-25
+version: 0.2.0
+date-released: 2026-09-17
 url: "https://github.com/Archerkattri/stepback"
 repository-code: "https://github.com/Archerkattri/stepback"
 doi: 10.5281/zenodo.21536384

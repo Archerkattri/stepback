@@ -4,7 +4,7 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.2.0] - 2026-09-17
 
 ### Fixed
 - Use kernel-owned file locks on Windows and remove unsafe age-based stale-lock
@@ -14,11 +14,18 @@ All notable changes to this project are documented here. The format is based on
 - Surface contained watcher checkpoint failures through the CLI instead of
   silently losing the diagnostic.
 
+- macOS watcher identity via a read-only `ps` start-time query; the
+  restore-owner marker parse now tolerates identities containing spaces.
+- Windows CI resolves an explicit Git Bash for the agent snippets instead
+  of the WSL stub in System32.
+
 ### Added
 - Write-ahead restore journal with explicit `stepback recover` recovery for
   interrupted file rewinds, selective restores and redo operations.
 - Fault-injection coverage for fresh-process recovery after a partial selective
   restore, plus a documented file-only recovery contract.
+
+- POSIX regression test for the O_EXCL lock fallback without `fcntl`.
 
 ## [0.1.2] - 2026-07-25
 
