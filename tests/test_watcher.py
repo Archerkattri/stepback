@@ -14,6 +14,16 @@ def _file_event(path: str):
     return SimpleNamespace(src_path=path, dest_path="", is_directory=False)
 
 
+def _wait_until(pred, timeout: float = 5.0) -> bool:
+    """Poll for a debounced timer callback; fixed sleeps flake on loaded CI."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if pred():
+            return True
+        time.sleep(0.01)
+    return bool(pred())
+
+
 def test_debounce_coalesces_a_burst():
     fired = threading.Event()
     calls = {"n": 0}
@@ -75,8 +85,8 @@ def test_callback_exception_is_recorded_and_reported():
 
     h = _DebounceHandler(boom, 0.02, on_error=errors.append)
     h.on_any_event(_file_event("/work/a.txt"))
-    time.sleep(0.1)
-    assert errors and "checkpoint failed" in str(errors[0])
+    assert _wait_until(lambda: errors), "debounced callback never fired"
+    assert "checkpoint failed" in str(errors[0])
     assert h.last_error is not None
     assert "RuntimeError" in h.last_error
 
@@ -97,6 +107,5 @@ def test_watcher_exposes_callback_error(tmp_path: Path):
 
     w = DebouncedWatcher(tmp_path, boom, 0.02)
     w._handler.on_any_event(_file_event(str(tmp_path / "a.txt")))
-    time.sleep(0.1)
-    assert w.last_error is not None
+    assert _wait_until(lambda: w.last_error is not None), "debounced callback never fired"
     assert "ValueError" in w.last_error
