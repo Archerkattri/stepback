@@ -9,7 +9,7 @@
   <a href="https://github.com/Archerkattri/stepback/actions/workflows/ci.yml"><img src="https://github.com/Archerkattri/stepback/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <a href="tests/"><img src="https://img.shields.io/badge/tests-86%20passing-16a34a?style=flat-square" alt="Tests"></a>
   <a href="LICENSE"><img src="https://img.shields.io/pypi/l/stepback?style=flat-square" alt="MIT license"></a>
-  <a href="https://doi.org/10.5281/zenodo.21536384"><img src="https://zenodo.org/badge/DOI/10.5281/zenodo.21536384.svg" alt="DOI"></a>
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.22820936.svg)](https://doi.org/10.5281/zenodo.22820936)
 </p>
 
 **Git time-travel for AI coding agents.** Wrap Claude Code, Codex, aider, or
