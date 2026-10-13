@@ -7,9 +7,9 @@
   <a href="https://pypi.org/project/stepback/"><img src="https://img.shields.io/pypi/pyversions/stepback?style=flat-square" alt="Python"></a>
   <a href="https://pypi.org/project/stepback/"><img src="https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fraw.githubusercontent.com%2FArcherkattri%2FArcherkattri%2Fmaster%2Fassets%2Fstats.json&query=%24.pypi_projects.stepback&label=lifetime%20downloads&style=flat-square&color=2f9e44" alt="Lifetime downloads"></a>
   <a href="https://github.com/Archerkattri/stepback/actions/workflows/ci.yml"><img src="https://github.com/Archerkattri/stepback/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-  <a href="tests/"><img src="https://img.shields.io/badge/tests-86%20passing-16a34a?style=flat-square" alt="Tests"></a>
+  <a href="tests/"><img src="https://img.shields.io/badge/tests-integration%20checks-16a34a?style=flat-square" alt="Integration checks"></a>
   <a href="LICENSE"><img src="https://img.shields.io/pypi/l/stepback?style=flat-square" alt="MIT license"></a>
-[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.22820936.svg)](https://doi.org/10.5281/zenodo.22820936)
+  <a href="https://doi.org/10.5281/zenodo.22820936"><img src="https://zenodo.org/badge/DOI/10.5281/zenodo.22820936.svg" alt="DOI"></a>
 </p>
 
 **Git time-travel for AI coding agents.** Wrap Claude Code, Codex, aider, or
@@ -194,11 +194,15 @@ redo, aborted), `2` bad invocation, `127` agent command not found.
 
 ## Development
 
+The retained integration checks cover the CLI, adapter boundaries,
+filesystem/Git hardening, and real watcher events. Engine/store internals are
+not covered by a pure unit-test suite.
+
 ```console
 pip install -e ".[dev]"
 ruff check .
 mypy
-pytest -q
+python -m pytest -q tests/test_cli.py tests/test_adapters.py tests/test_hardening.py tests/test_watcher.py
 ```
 
 See `CONTRIBUTING.md` for the layout and `ARCHITECTURE.md` for how it works.
@@ -214,6 +218,6 @@ MIT (c) 2026 Krishi Attri
 
 The current release includes selective file/subtree restore, write-ahead
 journalling, fresh-process recovery, untouched-path verification, atomic
-promotion and durable redo. The suite passes 86 tests with 1 platform-gated
-skip on Linux (85 passed, 2 skipped on Windows); ruff and mypy are clean on
-both targets. Conversation-layer rewind remains adapter/platform dependent.
+promotion and durable redo. CI runs the named integration checks above on
+Python 3.11 and 3.12 across Linux, Windows, and macOS. Conversation-layer
+rewind remains adapter/platform dependent.

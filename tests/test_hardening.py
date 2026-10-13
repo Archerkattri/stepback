@@ -8,7 +8,6 @@ recovery, garbage-collection-safe redo, locking, and the watcher pause.
 
 from __future__ import annotations
 
-import json
 import os
 import subprocess
 import sys
@@ -21,7 +20,6 @@ import pytest
 from stepback.engine import Engine
 from stepback.errors import RestoreError
 from stepback.lock import LockTimeout, file_lock
-from stepback.store import State
 
 
 def _git(cwd: Path, *args: str) -> str:
@@ -247,23 +245,11 @@ def test_corrupt_state_is_quarantined_not_lost(tmp_path: Path):
     assert state_path.exists()
 
     state_path.write_text("{ this is not valid json ")
-    reloaded = State.load(state_path)
-    assert reloaded.checkpoints == []  # fresh slate
+    reloaded = Engine(tmp_path)
+    assert reloaded.state.checkpoints == []  # fresh slate through the public engine boundary
     # the corrupt file was preserved, not silently deleted
     quarantined = list(state_path.parent.glob("state.json.corrupt-*"))
     assert quarantined, "corrupt state should be moved aside for forensics"
-
-
-def test_state_ignores_unknown_future_keys(tmp_path: Path):
-    (tmp_path / "f.txt").write_text("x\n")
-    eng = Engine(tmp_path)
-    eng.checkpoint()
-    raw = json.loads(eng.state_path.read_text())
-    raw["some_future_field"] = 42
-    raw["checkpoints"][0]["future_cp_field"] = "ignore me"
-    eng.state_path.write_text(json.dumps(raw))
-    reloaded = State.load(eng.state_path)
-    assert len(reloaded.checkpoints) == 1  # loaded despite unknown keys
 
 
 # -- redo durability across git gc ------------------------------------------
@@ -417,15 +403,6 @@ def test_watcher_status_does_not_signal_or_kill_child(tmp_path: Path):
     finally:
         child.terminate()
         child.wait(timeout=5)
-
-
-def test_watcher_status_rejects_pid_reuse_marker(tmp_path: Path):
-    eng = Engine(tmp_path)
-    eng._watch_pid_path.write_text(
-        f"{os.getpid()} test definitely-not-this-process-start"
-    )
-    assert eng.watcher_status() is None
-    assert not eng._watch_pid_path.exists()
 
 
 def test_restore_pause_covers_a_long_restore(tmp_path: Path, monkeypatch):

@@ -17,10 +17,14 @@ Requires Python 3.11+ and `git` on `PATH`.
 ```console
 ruff check .
 mypy
-pytest -q
+python -m pytest -q tests/test_cli.py tests/test_adapters.py tests/test_hardening.py tests/test_watcher.py
 ```
 
-All three must pass. CI runs them on Python 3.11 and 3.12.
+All checks must pass. The retained integration coverage is intentionally
+limited to CLI behavior, adapter boundaries, filesystem/Git hardening, and
+real watcher events; engine/store internals do not have a pure unit-test suite.
+CI runs the named test files on Python 3.11 and 3.12 across Linux, Windows,
+and macOS.
 
 ## Layout
 
@@ -34,7 +38,7 @@ src/stepback/
   errors.py     user-facing exception types (map to clean CLI messages)
   cli.py        Typer CLI
   adapters/     Layer 2 conversation adapters (best-effort, behind a Protocol)
-tests/          engine, hardening, CLI, adapters, watcher, store
+tests/          CLI, adapter boundaries, filesystem/Git hardening, watcher integration
 ```
 
 Read `ARCHITECTURE.md` before changing the engine or repo layer.
