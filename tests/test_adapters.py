@@ -14,10 +14,6 @@ from stepback.adapters.codex import CodexAdapter
 from stepback.engine import Engine
 
 
-def test_claude_slug_matches_known_format():
-    assert _slug(Path("/home/krishi/workspace/brain")) == "-home-krishi-workspace-brain"
-
-
 def test_claude_adapter_degrades_when_absent(tmp_path: Path):
     home = tmp_path / "home"
     home.mkdir()

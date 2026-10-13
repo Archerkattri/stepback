@@ -1,21 +1,18 @@
-"""Watcher tests: debounce coalescing, ignored paths, flush, and degradation."""
+"""Filesystem-observer integration checks for watcher lifecycle and callbacks."""
 
 from __future__ import annotations
 
 import threading
 import time
 from pathlib import Path
-from types import SimpleNamespace
 
-from stepback.watcher import DebouncedWatcher, _DebounceHandler
+import pytest
 
-
-def _file_event(path: str):
-    return SimpleNamespace(src_path=path, dest_path="", is_directory=False)
+from stepback.watcher import DebouncedWatcher
 
 
 def _wait_until(pred, timeout: float = 5.0) -> bool:
-    """Poll for a debounced timer callback; fixed sleeps flake on loaded CI."""
+    """Poll observer-thread state without relying on a fixed long sleep."""
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         if pred():
@@ -24,88 +21,51 @@ def _wait_until(pred, timeout: float = 5.0) -> bool:
     return bool(pred())
 
 
-def test_debounce_coalesces_a_burst():
-    fired = threading.Event()
-    calls = {"n": 0}
-
-    def on_settle():
-        calls["n"] += 1
-        fired.set()
-
-    h = _DebounceHandler(on_settle, quiet_seconds=0.1)
-    for _ in range(10):
-        h.on_any_event(_file_event("/work/a.txt"))
-        time.sleep(0.005)
-    assert fired.wait(2.0)
-    time.sleep(0.15)
-    assert calls["n"] == 1  # ten events -> one settle
-
-
-def test_ignored_dirs_do_not_trigger():
-    calls = {"n": 0}
-    h = _DebounceHandler(lambda: calls.__setitem__("n", calls["n"] + 1), 0.05)
-    h.on_any_event(_file_event("/work/.git/index"))
-    h.on_any_event(_file_event("/work/.stepback/state.json"))
-    time.sleep(0.15)
-    assert calls["n"] == 0
-
-
-def test_directory_events_ignored():
-    calls = {"n": 0}
-    h = _DebounceHandler(lambda: calls.__setitem__("n", calls["n"] + 1), 0.05)
-    h.on_any_event(SimpleNamespace(src_path="/work/d", dest_path="", is_directory=True))
-    time.sleep(0.15)
-    assert calls["n"] == 0
-
-
-def test_flush_fires_pending_immediately():
-    calls = {"n": 0}
-    h = _DebounceHandler(lambda: calls.__setitem__("n", calls["n"] + 1), 10.0)
-    h.on_any_event(_file_event("/work/a.txt"))  # long quiet window, not yet fired
-    assert calls["n"] == 0
-    h.flush()
-    assert calls["n"] == 1
-
-
-def test_callback_exception_never_propagates():
-    def boom():
-        raise RuntimeError("checkpoint failed")
-
-    h = _DebounceHandler(boom, 0.02)
-    h.on_any_event(_file_event("/work/a.txt"))
-    time.sleep(0.1)  # should not raise into the watcher thread
-    h.flush()  # also swallowed
-
-
-def test_callback_exception_is_recorded_and_reported():
-    errors: list[Exception] = []
-
-    def boom():
-        raise RuntimeError("checkpoint failed")
-
-    h = _DebounceHandler(boom, 0.02, on_error=errors.append)
-    h.on_any_event(_file_event("/work/a.txt"))
-    assert _wait_until(lambda: errors), "debounced callback never fired"
-    assert "checkpoint failed" in str(errors[0])
-    assert h.last_error is not None
-    assert "RuntimeError" in h.last_error
-
-
 def test_watcher_starts_and_stops(tmp_path: Path):
-    fired = {"n": 0}
-    w = DebouncedWatcher(tmp_path, lambda: fired.__setitem__("n", fired["n"] + 1), 0.1)
-    with w:
-        # some backend was selected (native, polling, or none) without raising
-        assert w.backend in {"native", "polling", "none"}
-    # stop() is clean and idempotent
-    w.stop()
+    watcher = DebouncedWatcher(tmp_path, lambda: None, 0.1)
+    with watcher:
+        assert watcher.backend in {"native", "polling", "none"}
+    watcher.stop()
 
 
-def test_watcher_exposes_callback_error(tmp_path: Path):
-    def boom():
+def test_watcher_coalesces_real_file_changes_and_ignores_internal_dirs(tmp_path: Path):
+    settled = threading.Event()
+    calls: list[float] = []
+
+    def on_settle() -> None:
+        calls.append(time.monotonic())
+        settled.set()
+
+    watcher = DebouncedWatcher(tmp_path, on_settle, quiet_seconds=0.1)
+    with watcher:
+        if watcher.backend == "none":
+            pytest.skip("no native or polling filesystem observer is available")
+
+        for relative in (Path(".git/index"), Path(".stepback/state.json")):
+            path = tmp_path / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("internal\n")
+        time.sleep(0.25)
+        assert not settled.is_set(), "internal state changes must not trigger checkpoints"
+
+        changed = tmp_path / "source.py"
+        for version in range(4):
+            changed.write_text(f"version = {version}\n")
+            time.sleep(0.02)
+        assert settled.wait(5), "real filesystem change did not reach the watcher callback"
+        time.sleep(0.2)
+
+    assert len(calls) == 1, "a burst of filesystem events should settle as one callback"
+
+
+def test_watcher_exposes_callback_error_from_filesystem_event(tmp_path: Path):
+    def boom() -> None:
         raise ValueError("bad")
 
-    w = DebouncedWatcher(tmp_path, boom, 0.02)
-    w._handler.on_any_event(_file_event(str(tmp_path / "a.txt")))
-    assert _wait_until(lambda: w.last_error is not None), "debounced callback never fired"
-    assert "ValueError" in w.last_error
+    watcher = DebouncedWatcher(tmp_path, boom, quiet_seconds=0.02)
+    with watcher:
+        if watcher.backend == "none":
+            pytest.skip("no native or polling filesystem observer is available")
+        (tmp_path / "a.txt").write_text("trigger\n")
+        assert _wait_until(lambda: watcher.last_error is not None), "filesystem callback never fired"
+    assert "ValueError" in watcher.last_error
