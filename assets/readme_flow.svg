@@ -1,4 +1,4 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 470" role="img" aria-labelledby="title desc">
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="470" viewBox="0 0 1200 470" role="img" aria-labelledby="title desc">
   <title id="title">StepBack restore and recovery transaction</title>
   <desc id="desc">Previewed inputs, write-ahead journal, staged replacement, and fresh-process recovery protect unrelated work.</desc>
   <rect width="1200" height="470" rx="22" fill="#020617"/>
